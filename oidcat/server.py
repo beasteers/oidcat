@@ -27,7 +27,7 @@ class OpenIDConnect(flask_oidc.OpenIDConnect):
             def decorated(*args, **kwargs):
                 # get token & check if it's valid
                 token = self.get_token_from_request()
-                validity = self.validate_token(token)
+                validity = self.validate_token(token, scopes_required, keycloak_role, client, checks)
                 if validity is True or not require_token:
                     return view_func(*args, **kwargs)
 
@@ -66,7 +66,7 @@ class OpenIDConnect(flask_oidc.OpenIDConnect):
         if validity is True:
             token_info = self.token_data(token)
             if (not self.has_keycloak_role(keycloak_role, token_info, client=client) or
-                    not all(chk(token_info) for chk in checks)):
+                    not all(chk(token_info) for chk in checks or ())):
                 validity = 'Insufficient privileges.'
         return validity
 
