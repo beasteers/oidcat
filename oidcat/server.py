@@ -41,18 +41,15 @@ class OpenIDConnect(flask_oidc.OpenIDConnect):
 
 
     def get_token_from_request(self):
-        token = None
-        if 'Authorization' in request.headers and request.headers['Authorization'].startswith('Bearer '):
-            token = request.headers['Authorization'].split(None,1)[1].strip()
         return (
-            token or
+            self._get_bearer_token() or
             request.form.get('access_token') or
             request.args.get('access_token') or
             flask.g.oidc_id_token and self.get_access_token() or None)
 
 
     def token_data(self, token=None):
-        token = token or self.get_access_token() or {}
+        token = token or self.get_token_from_request() or {}
         if not isinstance(token, dict):
             header, tkn, signature = token.split('.')
             token = json.loads(base64.b64decode(tkn + '==='))
@@ -60,6 +57,10 @@ class OpenIDConnect(flask_oidc.OpenIDConnect):
 
     def get_access_token(self):
         return super().get_access_token() if flask.g.oidc_id_token else None
+
+    def _get_bearer_token(self):
+        auth = request.headers.get('Authorization') or ''
+        return auth.split(None,1)[1].strip() if auth.startswith('Bearer ') else None
 
     def validate_token(self, token, scopes_required=None, keycloak_role=None, client=True, checks=None):
         validity = super().validate_token(token, scopes_required) if token else 'No token'
@@ -70,23 +71,29 @@ class OpenIDConnect(flask_oidc.OpenIDConnect):
                 validity = 'Insufficient privileges.'
         return validity
 
+    def get_roles(self, token=None, client=True):
+        token = self.token_data(token)
+        # get roles from token
+        mode = 'keycloak'  # TODO get this from app config
+        if mode in ('keycloak', 'kc'):
+            user_roles = token['realm_access']['roles'] if 'realm_access' in token else []
+            if client:
+                if client is True:
+                    client = self.client_secrets['client_id']
+                try:
+                    user_roles += token['resource_access'][client]['roles']
+                except KeyError:
+                    pass
+        else:
+            raise ValueError('Unknown token schema: {!r}'.format(mode))
+        return user_roles
 
     def has_keycloak_role(self, roles, token=None, client=True):
         if not roles:
             return True
-        token = self.token_data(token)
-        # get roles from token
-        user_roles = token['realm_access']['roles'] if 'realm_access' in token else []
-        if client:
-            if client is True:
-                client = self.client_secrets['client_id']
-            try:
-                user_roles += token['resource_access'][client]['roles']
-            except KeyError:
-                pass
         # compare roles
         roles = {roles} if isinstance(roles, str) else set(roles)
-        return roles.issubset(set(user_roles))
+        return roles.issubset(set(self.get_roles(token, client=client)))
 
     # def load_secrets(self, app):  # this is from master, but is not available in the current pip package
     #     # Load client_secrets.json to pre-initialize some configuration
