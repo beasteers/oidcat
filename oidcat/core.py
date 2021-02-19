@@ -9,8 +9,6 @@ from .util import get_well_known, RequestError
 
 
 class Session(requests.Session):
-    access_token = refresh_token = None
-    expires = refresh_expires = None
     def __init__(self, well_known_url, username, password,
                  client_id='admin-cli', client_secret=None, login=True, refresh_buffer=60,
                  require_token=True, token_key=None):

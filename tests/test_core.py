@@ -45,7 +45,7 @@ def server():
 @pytest.fixture
 def authheaders():
     sess = oidcat.Session(HOST, USERNAME, PASSWORD, CLIENT_ID, CLIENT_SECRET)
-    yield {'Authorization': 'Bearer {}'.format(sess.access_token)}
+    yield {'Authorization': 'Bearer {}'.format(sess.access.token)}
 
 
 def test_core(server):
