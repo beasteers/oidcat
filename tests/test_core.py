@@ -12,6 +12,13 @@ TEST_MISSING_ROLE = 'asdfaoinsadfn'
 USERNAME = os.getenv('KEYCLOAK_USER') or 'admin'
 PASSWORD = os.getenv('KEYCLOAK_PASS') or 'admin'
 
+def getitem2(x, key):
+    try:
+        return x[key]
+    except KeyError:
+        raise KeyError("Could not get key '{}' from {}".format(key, x))
+
+
 @pytest.fixture(scope='module')
 def server():
     import flask
@@ -42,22 +49,23 @@ def server():
         with app.app_context():
             yield client
 
+
+@pytest.fixture(scope="module")
+def sess():
+    yield oidcat.Session(HOST, USERNAME, PASSWORD, CLIENT_ID, CLIENT_SECRET)
+
 @pytest.fixture
-def authheaders():
-    sess = oidcat.Session(HOST, USERNAME, PASSWORD, CLIENT_ID, CLIENT_SECRET)
+def bearer(sess):
     yield {'Authorization': 'Bearer {}'.format(sess.access.token)}
 
 
 def test_core(server):
-    assert server.get('/').get_json()['success'] is True
+    assert getitem2(server.get('/').get_json(), 'success') is True
 
-def test_protected(server, authheaders):
+def test_protected(server, bearer):
     assert server.get('/special').status_code == 401
-    assert server.get('/special', headers=authheaders).get_json()['success'] is True
+    assert getitem2(server.get('/special', headers=bearer).get_json(), 'success') is True
 
-
-
-def test_inaccessible(server, authheaders):
+def test_inaccessible(server, sess, bearer):
     assert server.get('/inaccessible').status_code == 401
-    sess = oidcat.Session(HOST, USERNAME, PASSWORD, CLIENT_ID, CLIENT_SECRET)
-    assert server.get('/inaccessible', headers=authheaders).status_code == 401
+    assert server.get('/inaccessible', headers=bearer).status_code == 401

@@ -1,21 +1,22 @@
+import os
 import json
+import pickle
 import base64
 import datetime
 import threading
 import requests
 from requests.auth import HTTPBasicAuth
-from .util import get_well_known, RequestError
+from .util import get_well_known, RequestError, AuthError
 
 
 
 class Session(requests.Session):
-    def __init__(self, well_known_url, username, password,
-                 client_id='admin-cli', client_secret=None, login=True, refresh_buffer=60,
-                 require_token=True, token_key=None):
+    def __init__(self, well_known_url, username=None, password=None,
+                 client_id='admin-cli', client_secret=None,
+                 require_token=True, token_key=None, **kw):
         super().__init__()
         self.access = Access(
-            well_known_url, username, password, client_id, client_secret,
-            login=login, refresh_buffer=refresh_buffer, sess=self)
+            well_known_url, username, password, client_id, client_secret, sess=self, **kw)
         self._require_token = require_token
         self._token_key = token_key
 
@@ -30,47 +31,82 @@ class Session(requests.Session):
                 kw.setdefault('headers', {}).setdefault("Authorization", "Bearer {}".format(tkn))
         return super().request(*a, **kw)
 
+    def login(self, *a, **kw):
+        return self.access.login(*a, **kw)
+
+    def logout(self, *a, **kw):
+        return self.access.login(*a, **kw)
+
 
 
 class Token(str):
+    _FOREVER_ = 3600*24*5000
     def __new__(self, token, *a, **kw):  # TypeError: str() argument 2 must be str, not int
         return super().__new__(self, token)
 
-    def __init__(self, token, expires, buffer=60):
+    def __init__(self, token, buffer=10):
         super().__init__()
         self.token = token
-        self.expires = datetime.datetime.now() + datetime.timedelta(seconds=expires)
-        self.buffer = (
-            buffer if isinstance(buffer, datetime.timedelta) else
-            datetime.timedelta(seconds=buffer))
 
         header, tkn, self.signature = self.token.split('.')
         self.header = json.loads(base64.b64decode(header + '==='))
         self.data = json.loads(base64.b64decode(tkn + '==='))
 
+        expires = self.data['exp']
+        self.expires = datetime.datetime.fromtimestamp(expires) if expires else None
+        self.buffer = (
+            buffer if isinstance(buffer, datetime.timedelta) else
+            datetime.timedelta(seconds=buffer))
+
     @property
     def time_left(self):
-        return self.expires - datetime.datetime.now()
+        return self.expires - datetime.datetime.now() if self.expires else self._FOREVER_
+
+    @property
+    def valid(self):
+        return self.token and (not self.expires or self.time_left.total_seconds() > 0)
 
     def __bool__(self):
-        return self.token and self.time_left > self.buffer
+        return self.token and (not self.expires or self.time_left > self.buffer)
 
+    def __getitem__(self, k):
+        return self.data[k]
 
 
 class Access:
-    token = refresh_token = None
-    def __init__(self, url, username, password, client_id='admin-cli', client_secret=None,
-                 refresh_buffer=60, login=None, sess=None):
+    def __init__(self, url, username=None, password=None,
+                 client_id='admin-cli', client_secret=None,
+                 token=None, refresh_token=None, refresh_buffer=10, login=True,
+                 sess=None, _wk=None, store=False):
         self.sess = sess or requests
         self.username = username
         self.password = password
-        self.well_known = get_well_known(url)
+        self.well_known = _wk or get_well_known(url)
         self.client_id = client_id
         self.client_secret = client_secret
+
         self.refresh_buffer = refresh_buffer
         self.lock = threading.Lock()
-        if login and self.username and self.password:
+
+        # possibly load token from file
+        self.store = store
+        self.token = Token(token, refresh_buffer) if token else None
+        self.refresh_token = Token(refresh_token) if refresh_token else None
+        if self.store and os.path.isfile(self.store) and not self.token:
+            with open(self.store, 'rb') as f:
+                self.token, self.refresh_token = pickle.load(f)
+        if login and not self.refresh_token and self.username and self.password:
             self.login()
+
+    def __repr__(self):
+        return 'Access(\n{})'.format(''.join('  {}={!r},\n'.format(k, v) for k, v in (
+            ('username', self.username),
+            ('client', self.client_id),
+            ('valid', bool(self.token)),
+            ('refresh_valid', bool(self.refresh_token)),
+            ('token', self.token),
+            ('refresh_token', self.refresh_token),
+        )))
 
     def __str__(self):
         return str(self.token)
@@ -96,11 +132,10 @@ class Access:
     def bearer(self):
         return 'Bearer {}'.format(self.require())
 
-    def login(self, username=None, password=None, store=True):
-        if store:
-            username = self.username = username or self.username
-            password = self.password = password or self.password
-        if not username:
+    def login(self, username=None, password=None, offline=False):
+        username = self.username = username or self.username
+        password = self.password = password or self.password
+        if not username and not self.refresh_token:
             raise ValueError('Username not provided for login at {}'.format(
                 self.well_known['token_endpoint']))
 
@@ -116,15 +151,20 @@ class Access:
                     'grant_type': 'password',
                     'username': username,
                     'password': password,
-                })
+                }),
+                **({'scope': 'offline_access'} if offline else {})
             }, token=False).json()
 
         if 'error' in resp:
             raise RequestError('Error getting access token: '
                                '({error}) {error_description}'.format(**resp))
 
-        self.token = Token(resp['access_token'], resp['expires_in'], self.refresh_buffer)
-        self.refresh_token = Token(resp['refresh_token'], resp['refresh_expires_in'])
+        self.token = Token(resp['access_token'], self.refresh_buffer)
+        self.refresh_token = Token(resp['refresh_token'])
+        if self.store:
+            os.makedirs(os.path.dirname(self.store) or '.', exist_ok=True)
+            with open(self.store, 'wb') as f:
+                pickle.dump([self.token, self.refresh_token], f)
 
     def logout(self):
         self.sess.post(
@@ -134,7 +174,7 @@ class Access:
                 'refresh_token': str(self.refresh_token),
                 'client_id': self.client_id,
                 'client_secret': self.client_secret,
-            })
+            }, token=False)
         self.token = self.refresh_token = None
 
     def user_info(self):

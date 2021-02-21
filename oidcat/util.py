@@ -2,6 +2,7 @@ import os
 import json
 import traceback
 import requests
+import urllib
 
 
 HOST_KEY = 'VIRTUAL_HOST'
@@ -11,6 +12,9 @@ DEFAULT_PORT = 8000
 
 
 class RequestError(RuntimeError):
+    pass
+
+class AuthError(Exception):
     pass
 
 
@@ -62,7 +66,7 @@ def get_well_known(url, realm=None, secure=None):
     '''
     if not url.startswith('https://'):
         parts = url.split('@', 1)
-        url = as_url('{}/auth/realms/{}/.well-known/openid-configuration'.format(
+        url = asurl('{}/auth/realms/{}/.well-known/openid-configuration'.format(
             parts[-1], realm or (parts[0] if len(parts) > 1 else 'master')), secure=secure)
 
     resp = requests.get(url).json()
@@ -111,7 +115,7 @@ def with_keycloak_secrets_file(
 
 def with_keycloak_secrets_file_from_environment(prefix, url=None, realm=None, fname=None):
     return with_keycloak_secrets_file(
-        as_url(url or envv('AUTH_HOST', prefix)),
+        asurl(url or envv('AUTH_HOST', prefix)),
         envv('CLIENT_ID', prefix),
         envv('CLIENT_SECRET', prefix),
         realm=realm or envv('AUTH_REALM', prefix, 'master'),
@@ -144,16 +148,25 @@ def envv(k, prefix=None, default=None):
 
 
 
-def as_url(url, *paths, secure=None):
+def asurl(url, *paths, secure=None, **args):
     if url:
-        if not url.startswith('http://') or url.startswith('https://'):
+        if not (url.startswith('http://') or url.startswith('https://')):
             if secure is None:
                 secure = url != 'localhost'
             url = 'http{}://{}'.format(bool(secure)*'s', url)
-        return os.path.join(url, *(p.lstrip('/') for p in paths))
+        url = os.path.join(url, *(p.lstrip('/') for p in paths))
+        # add args, and make sure they go before the hashstring
+        args = {k: v for k, v in args.items() if v is not None}
+        if args:
+            url, hsh = url.split('#', 1) if '#' in url else (url, '')
+            url += ('&' if '?' in url else '?') + urllib.parse.urlencode(args)
+            if hsh:
+                url += '#' + hsh
+        return url
+as_url = asurl  # backwards compat
 
 def get_redirect_uris(uris=None):
-    uris = as_url(uris or os.getenv(HOST_KEY) or '{}:{}/*'.format(DEFAULT_HOST, os.getenv(PORT_KEY, str(DEFAULT_PORT))))
+    uris = asurl(uris or os.getenv(HOST_KEY) or '{}:{}/*'.format(DEFAULT_HOST, os.getenv(PORT_KEY, str(DEFAULT_PORT))))
     return uris if isinstance(uris, (list, tuple)) else [uris] if uris else uris
 
 
@@ -161,3 +174,41 @@ def traceback_html(e):
     return '''{err}<pre><h3>Traceback (most recent call last):</h3><div>{tb}</div><h3>{typename}: {err}</h3></pre>'''.strip().format(
         err=e, tb='<hr/>'.join(traceback.format_tb(e.__traceback__)).strip('\n'),
         typename=type(e).__name__)
+
+
+
+
+class Env:
+    def __init__(self, prefix=None, upper=True, **kw):
+        self.prefix = prefix or ''
+        self.upper = upper
+        self.vars = kw
+        if self.upper:
+            self.prefix = self.prefix.upper()
+
+    def __str__(self):
+        return '<env {}>'.format(''.join([
+            '\n  {}={}'.format(k, self(k)) for k in self.vars
+        ]))
+
+    def __contains__(self, key):
+        return self.key(key) in os.environ
+
+    def __call__(self, key, default=None, cast=None):
+        y = os.environ.get(self.key(key))
+        if y is None:
+            return default
+        if callable(cast):
+            return y
+        if y in ('1', '0'):
+            y = int(y)
+        if y.lower() in ('y', 'n'):
+            y = y.lower() == 'y'
+        return y
+
+    def key(self, x):
+        k = (self.prefix or '') + self.vars.get(x, x)
+        return k.upper() if self.upper else k
+
+    def all(self):
+        return {k: v for k, v in os.environ.items() if k.startswith(self.prefix)}
