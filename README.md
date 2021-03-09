@@ -40,7 +40,6 @@ Here's an example resource server.
 import os
 import flask
 import oidcat.server
-import sqlitedict
 
 
 app = flask.Flask(__name__)
@@ -55,6 +54,7 @@ app.config.update(
     #     'auth.myapp.com', 'myclient', 'supersecret', 'myrealm'),
 )
 
+import sqlitedict
 oidc = oidcat.server.OpenIDConnect(app, credentials_store=sqlitedict.SqliteDict('creds.db', autocommit=True))
 # or equivalently:
 oidc = oidcat.server.OpenIDConnect(app, 'creds.db')
@@ -72,21 +72,27 @@ def index():
 # question - what exactly is the difference between these?
 
 @app.route('/edit')
-@oidc.accept_token(keycloak_role='editor')  # client role
+@oidc.accept_token(role='editor')  # client/realm role
+def edit():
+    '''This will give a 402 if you don't pass `access_token`.'''
+    return flask.jsonify({'message': 'you did something!'})
+
+@app.route('/edit')
+@oidc.accept_token(role='editor', realm=False)  # client role
 def edit():
     '''This will give a 402 if you don't pass `access_token`.'''
     return flask.jsonify({'message': 'you did something!'})
 
 
 @app.route('/view')
-@oidc.accept_token(scopes_required='reader')  # client scopes
+@oidc.accept_token(scopes_required=['reader'])  # client scopes
 def view():
     '''This will give a 402 if you don't pass `access_token`.'''
     return flask.jsonify({'message': 'something interesting!'})
 
 
 @app.route('/ultimatepower')
-@oidc.accept_token(keycloak_role='admin', client=None)  # realm role
+@oidc.accept_token(role='admin', client=None)  # realm role
 def ultimatepower():
     '''This will give a 402 if you don't pass `access_token`.'''
     return flask.jsonify({'message': 'mwahahah!'})
@@ -98,18 +104,28 @@ if __name__=='__main__':
 ```
 
 ### Changes
+ - `Session`
+    - add `Access` abstraction which encapsulates the access and refresh tokens, well known, and login/logout logic.
+    - the access token is automatically added to requests using the Bearer token method.
+        - to disable this on a per-request basis, pass `token=False` to your request method (e.g. `sess.get(..., token=False)`)
+        - to disable this for all requests on the object, you can do `Session(..., require_token=False)`
+        - and to re-enable it on a per-request basis: `sess.get(..., token=False)`
+    - add a `login`/`logout` method (which is a convenience wrapper for the Access object)
+ - `token`
+    - add a token class which encapsulates the token, token data, and expiration logic
+    - a token's truthiness can be used to determine if it needs to be refreshed
+    - add token checking function `has_role`
+ - `server`:
+     - `accept_token` takes additional parameters:
+        - `role (str, list)`: roles to check for in the token
+        - `client (str, bool, default=True)`: see `has_role`
+        - `checks (list of callables)`: you can pass arbitrary
 
- - `accept_token` takes additional parameters:
-    - `keycloak_role (str, list)`: roles to check for in the token
-    - `client (str, bool, default=True)`: see `has_keycloak_role`
-    - `checks (list of callables)`: you can pass arbitrary
- -
+     - `has_role` checks for keycloak roles in the token. right now we just support Keycloak compatible token formats
+         - `*roles (tuple[str])`: the roles to compare against
+         - `client_id (str, bool, default=True)`: if a string, it will check for roles in that
+                 client_id. If True, it will check in the current client. If False/None, it
+                 will check for realm roles.
 
- - `has_keycloak_role` checks for keycloak roles in the token (in master, but not current release)
-     - `role (str, list)`: the roles to compare against
-     - `client (str, bool, default=True)`: if a string, it will check for roles in that
-             client-id. If True, it will check in the current client. If False/None, it
-             will check for realm roles.
-
- - `util.with_keycloak_secrets_file`: generate the client secrets file and return the path to it. See usage above.
-    - this also handles all of the additional urls (token introspection, etc) from the base url.
+     - `util.with_keycloak_secrets_file`: generate the client secrets file and return the path to it. See usage above.
+        - this also handles all of the additional urls (token introspection, etc) from the base url.

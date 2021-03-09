@@ -5,14 +5,17 @@ import oidcat
 
 def test_env():
     env = oidcat.util.Env('blahblah_', a='asdfasdf')
-    K = 'blahblah_asdfasdf'.upper()
-    assert env.key('a') == K
-    os.environ[K] = 'qqqqqq'
-    assert env('a') == os.environ[K]
+    k1 = 'blahblah_asdfasdf'.upper()
+    assert env.key('a') == k1
+    os.environ[k1] = 'qqqqqq'
+    assert env('a') == os.environ[k1]
 
-    K = 'blahblah_b'.upper()
-    os.environ[K] = 'qqqqqq'
-    assert env('b') == os.environ[K]
+    k2 = 'blahblah_b'.upper()
+    os.environ[k2] = 'qqqqqq'
+    assert env('b') == os.environ[k2]
+
+    assert env('a', 'b') == [os.environ[k1], os.environ[k2]]
+    assert env(asdf='a', zxcv='b') == {'asdf': os.environ[k1], 'zxcv': os.environ[k2]}
 
 
 def test_asurl():
@@ -23,3 +26,14 @@ def test_asurl():
     assert oidcat.util.asurl(host, 'hi', secure=True) == 'https://{}/hi'.format(host)
     assert oidcat.util.asurl('http://{}'.format(host), secure=True) == 'http://{}'.format(host)
     assert oidcat.util.asurl('https://{}'.format(host), secure=True) == 'https://{}'.format(host)
+
+
+def test_aslist():
+    assert oidcat.util.aslist(5) == [5]
+    assert oidcat.util.aslist([5]) == [5]
+    assert oidcat.util.aslist((5,)) == (5,)
+
+
+def test_color():
+    txt = 'asdf'
+    assert oidcat.util.color(txt, 'blue') == oidcat.util.color.blue(txt) == '\033[0;34m{}\033[0m'.format(txt)

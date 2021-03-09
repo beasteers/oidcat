@@ -29,25 +29,45 @@ def server():
             HOST, CLIENT_ID, CLIENT_SECRET),
         SECRET_KEY='blagh')
 
-    oidc = oidc = oidcat.server.OpenIDConnect(app, '/tmp/creds.db')
+    oidc = oidcat.server.OpenIDConnect(app, '/tmp/creds.db')
 
     @app.route('/')
     def index():
         return flask.jsonify({'success': True})
 
     @app.route('/special')
-    @oidc.accept_token(keycloak_role=TEST_ROLE)
+    @oidc.accept_token(role=TEST_ROLE)
     def special():
+        token = oidc.valid_token()
+        assert token.preferred_username == USERNAME
+        assert token.check_roles(TEST_ROLE, TEST_MISSING_ROLE) == [True, False]
         return flask.jsonify({'success': True})
 
     @app.route('/inaccessible')
-    @oidc.accept_token(keycloak_role=TEST_MISSING_ROLE)
+    @oidc.accept_token(role=TEST_MISSING_ROLE)
     def inaccessible():
         return flask.jsonify({'success': True})
 
+    @app.route('/accessible')
+    def accessible():
+        token = oidc.valid_token(required=True)
+        r1, r2 = token.check_roles(TEST_ROLE, TEST_MISSING_ROLE, required=True)
+        assert r1 and not r2
+        return flask.jsonify({'success': True})
+
+    @app.route('/inaccessible2')
+    def inaccessible2():
+        token = oidc.valid_token()
+        token.check_roles(TEST_MISSING_ROLE, required=True)
+        return flask.jsonify({'success': True})
+
     with app.test_client() as client:
-        with app.app_context():
-            yield client
+        yield client
+        # with app.app_context():
+        #     yield client
+
+# @pytest.fixture
+# def client(client):
 
 
 @pytest.fixture(scope="module")
@@ -63,9 +83,18 @@ def test_core(server):
     assert getitem2(server.get('/').get_json(), 'success') is True
 
 def test_protected(server, bearer):
+    print(bearer)
     assert server.get('/special').status_code == 401
     assert getitem2(server.get('/special', headers=bearer).get_json(), 'success') is True
 
 def test_inaccessible(server, sess, bearer):
+    assert server.get('/inaccessible').status_code == 401
+    assert server.get('/inaccessible', headers=bearer).status_code == 401
+
+def test_accessible(server, sess, bearer):
+    assert server.get('/accessible').status_code == 401
+    assert getitem2(server.get('/accessible', headers=bearer).get_json(), 'success') is True
+
+def test_inaccessible2(server, sess, bearer):
     assert server.get('/inaccessible').status_code == 401
     assert server.get('/inaccessible', headers=bearer).status_code == 401

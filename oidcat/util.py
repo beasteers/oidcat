@@ -1,22 +1,17 @@
 import os
 import json
+import functools
+import contextlib
 import traceback
 import requests
 import urllib
+from . import RequestError
 
 
 HOST_KEY = 'VIRTUAL_HOST'
 PORT_KEY = 'VIRTUAL_PORT'
 DEFAULT_HOST = 'localhost'
 DEFAULT_PORT = 8000
-
-
-class RequestError(RuntimeError):
-    pass
-
-class AuthError(Exception):
-    pass
-
 
 
 def get_well_known(url, realm=None, secure=None):
@@ -113,19 +108,19 @@ def with_keycloak_secrets_file(
     })
 
 
-def with_keycloak_secrets_file_from_environment(prefix, url=None, realm=None, fname=None):
+def with_keycloak_secrets_file_from_environment(env=None, url=None, realm=None, fname=None):
+    env = env or 'APP'
+    if isinstance(env, str):
+        env = Env(env)
     return with_keycloak_secrets_file(
-        asurl(url or envv('AUTH_HOST', prefix)),
-        envv('CLIENT_ID', prefix),
-        envv('CLIENT_SECRET', prefix),
-        realm=realm or envv('AUTH_REALM', prefix, 'master'),
-        redirect_uris=get_redirect_uris(envv('REDIRECT_URIS', prefix)),
+        asurl(url or env('AUTH_HOST')), env('CLIENT_ID'), env('CLIENT_SECRET'),
+        realm=realm or env('AUTH_REALM', 'master'),
+        redirect_uris=get_redirect_uris(env('REDIRECT_URIS')),
         fname=fname,
     )
 
 
 def _write_secrets_file(fname, cfg):
-    print(fname, cfg)
     if not fname:
         return cfg
     if fname is True:
@@ -140,12 +135,14 @@ def _write_secrets_file(fname, cfg):
 
 
 
-def kmerge(*xs, sep='_'):
-    return sep.join(str(x) for x in xs if x)
+# def kmerge(*xs, sep='_'):
+#     return sep.join(str(x) for x in xs if x)
 
-def envv(k, prefix=None, default=None):
-    return os.getenv(kmerge(k, prefix)) or default
+# def envv(k, prefix=None, default=None):
+#     return os.getenv(kmerge(k, prefix)) or default
 
+def aslist(x):
+    return x if isinstance(x, (list, tuple)) else [x] if x else []
 
 
 def asurl(url, *paths, secure=None, **args):
@@ -170,10 +167,10 @@ def get_redirect_uris(uris=None):
     return uris if isinstance(uris, (list, tuple)) else [uris] if uris else uris
 
 
-def traceback_html(e):
-    return '''{err}<pre><h3>Traceback (most recent call last):</h3><div>{tb}</div><h3>{typename}: {err}</h3></pre>'''.strip().format(
-        err=e, tb='<hr/>'.join(traceback.format_tb(e.__traceback__)).strip('\n'),
-        typename=type(e).__name__)
+# def traceback_html(e):
+#     return '''{err}<pre><h3>Traceback (most recent call last):</h3><div>{tb}</div><h3>{typename}: {err}</h3></pre>'''.strip().format(
+#         err=e, tb='<hr/>'.join(traceback.format_tb(e.__traceback__)).strip('\n'),
+#         typename=type(e).__name__)
 
 
 
@@ -194,7 +191,16 @@ class Env:
     def __contains__(self, key):
         return self.key(key) in os.environ
 
-    def __call__(self, key, default=None, cast=None):
+    def __getattr__(self, key):
+        return self.get(key)
+
+    def __call__(self, *keys, **kw):
+        return (
+            (self.get(keys[0], **kw) if len(keys) == 1 else [self.get(k, **kw) for k in keys])
+            if keys else {k: self.get(v) for k, v in kw.items()}
+        )
+
+    def get(self, key, default=None, cast=None):
         y = os.environ.get(self.key(key))
         if y is None:
             return default
@@ -212,3 +218,72 @@ class Env:
 
     def all(self):
         return {k: v for k, v in os.environ.items() if k.startswith(self.prefix)}
+
+
+
+
+
+class Colors(dict):
+    '''Color text. e.g.
+    >>> print(color('hi', 'red') + color.blue('hello') + color['green']('sup'))
+    '''
+    def __call__(self, x, name=None):
+        if not name:
+            return str(x)
+        return '\033[{}m{}\033[0m'.format(super().__getitem__(name.lower()), x) if name else x
+    def __getitem__(self, k):
+        if k not in self:
+            raise KeyError(k)
+        return functools.partial(self.__call__, name=k)
+    def __getattr__(self, k):
+        if k not in self:
+            raise AttributeError(k)
+        return functools.partial(self.__call__, name=k)
+
+color = Colors(
+    black='0;30',
+    red='0;31',
+    green='0;32',
+    orange='0;33',
+    blue='0;34',
+    purple='0;35',
+    cyan='0;36',
+    lightgray='0;37',
+    darkgray='1;30',
+    lightred='1;31',
+    lightgreen='1;32',
+    yellow='1;33',
+    lightblue='1;34',
+    lightpurple='1;35',
+    lightcyan='1;36',
+    white='1;37',
+)
+color_ = color
+
+
+def ask(question, color=None, secret=False):
+    prompt = input
+    if secret:
+        import getpass
+        prompt = getpass.getpass
+    return prompt(':: {} '.format(color_(question, color)))
+
+
+@contextlib.contextmanager
+def saveddict(fname):
+    import base64
+    try:
+        data = {}
+        fname = fname and os.path.expanduser(fname)
+        if fname and os.path.isfile(fname):
+            try:
+                with open(fname, 'rb') as f:
+                    data = json.loads(base64.b64decode(f.read()).decode('utf-8'))
+            except json.decoder.JSONDecodeError:
+                pass
+        yield data
+    finally:
+        if fname:
+            os.makedirs(os.path.dirname(fname) or '.', exist_ok=True)
+            with open(fname, 'wb') as f:
+                f.write(base64.b64encode(json.dumps(data).encode('utf-8')))
