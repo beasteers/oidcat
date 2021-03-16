@@ -194,11 +194,8 @@ class Env:
     def __getattr__(self, key):
         return self.get(key)
 
-    def __call__(self, *keys, **kw):
-        return (
-            (self.get(keys[0], **kw) if len(keys) == 1 else [self.get(k, **kw) for k in keys])
-            if keys else {k: self.get(v) for k, v in kw.items()}
-        )
+    def __call__(self, key, default=None, *a, **kw):
+        return self.get(key, default, *a, **kw)
 
     def get(self, key, default=None, cast=None):
         y = os.environ.get(self.key(key))
@@ -212,12 +209,48 @@ class Env:
             y = y.lower() == 'y'
         return y
 
+    def gather(self, *keys, **kw):
+        return (
+            (self.get(keys[0], **kw) if len(keys) == 1 else [self.get(k, **kw) for k in keys])
+            if keys else {k: self.get(v) for k, v in kw.items()}
+        )
+
     def key(self, x):
         k = (self.prefix or '') + self.vars.get(x, x)
         return k.upper() if self.upper else k
 
     def all(self):
         return {k: v for k, v in os.environ.items() if k.startswith(self.prefix)}
+
+
+
+
+
+class Role(list):
+    '''Define a set of roles: e.g.
+    >>> r, w, d = Role('read'), Role('write'), Role('delete')
+    >>> r.audio + r.any.spl + (r+w).meta + d('audio', 'spl')
+    ['read-audio', 'read-any-spl', 'read-any-meta', 'write-any-meta', 'delete-audio', 'delete-spl']
+    '''
+    def __init__(self, *xs):
+        super().__init__(xi for x in xs for xi in ([x] if isinstance(x, str) else x))
+
+    def __call__(self, *keys):
+        return Role('{}-{}'.format(i, ki) for i in self for k in keys for ki in Role(k))
+
+    def __add__(self, *xs):
+        return Role(self, *Role(*xs))
+
+    __getattr__ = lambda self, k: self(k)
+    __radd__ = lambda self, x: Role(x).join(self)
+
+# r, w, d = Role('read'), Role('write'), Role('delete')
+# GROUPS = {
+#     'sensor-engineer': r.audio + r.any.spl + (r+w+d).any.meta,
+#     'sensor': w.audio + w.spl + w.status,
+#     'agent': r.spl + w('audio', 'spl'),
+#     'participant': (r+w+d).audio,
+# }
 
 
 

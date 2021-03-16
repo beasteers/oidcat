@@ -12,13 +12,14 @@ import functools
 import flask
 from flask import request
 import flask_oidc
+import oidcat
 from . import util, Unauthorized, RequestError, exc2response
 from .token import Token
 
 
 class OpenIDConnect(flask_oidc.OpenIDConnect):
     @functools.wraps(flask_oidc.OpenIDConnect.__init__)
-    def __init__(self, app, credentials_store=None, *a, **kw):
+    def __init__(self, app=None, credentials_store=None, *a, **kw):
         if isinstance(credentials_store, str):
             import sqlitedict
             credentials_store = sqlitedict.SqliteDict(
@@ -61,14 +62,23 @@ class OpenIDConnect(flask_oidc.OpenIDConnect):
         return token if token is not None else Token()
 
     def valid_token(self, *roles, scopes=None, realm_role=None, client_role=None,
-                    required=True, checks=None, token=None):
+                    client_id=True, required=True, checks=None, token=None):
         # check if token is valid
         token = self.token if token is None else Token.astoken(token)
-        validity = self.validate_token(token.token, scopes) if token.token else 'No token'
+        validity = token.validity
+        if validity is True and not token.token:
+            validity = 'No token'  # redundant
+        if validity is True:
+            validity = self.validate_token(token.token, scopes)
         if validity is True:
             # make sure it has one of the required roles, and that all arbitrary checks pass.
-            if (not self.has_role(*roles, realm=realm_role, client=client_role) or
-                    not all(chk(token) for chk in checks or ())):
+            try:
+                validity = self.has_role(
+                    *roles, realm=realm_role, client=client_role, client_id=client_id,
+                    required=True)
+            except oidcat.Unauthorized as e:
+                validity = str(e)
+            if validity is True and not all(chk(token) for chk in checks or ()):
                 validity = 'Insufficient privileges.'
         token.valid = True if validity is True else Unauthorized(validity)
 
@@ -86,12 +96,12 @@ class OpenIDConnect(flask_oidc.OpenIDConnect):
 
     # check token
 
-    def has_role(self, *roles, realm=None, client=None, client_id=True):
+    def has_role(self, *roles, realm=None, client=None, client_id=True, **kw):
         if client_id is True:
             client_id = self.client_secrets['client_id']
         return self.token.has_role(
             *roles, realm=realm, client=client, client_id=client_id,
-            mode=flask.current_app.config['OIDC_OAUTH2_PROVIDER'])
+            mode=flask.current_app.config['OIDC_OAUTH2_PROVIDER'], **kw)
 
     def require_role(self, *roles, **kw):
         return self.require(self.has_role(*roles, **kw))

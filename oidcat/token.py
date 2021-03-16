@@ -57,6 +57,15 @@ class Token(dict):
         self._valid = value
 
     @property
+    def validity(self):
+        return (
+            'No token' if not self.token else
+            'Token invalid' if not self._valid else
+            'Token expired' if (self.expires and self.time_left.total_seconds() <= 0)
+            else True
+        )
+
+    @property
     def username(self):
         return self.preferred_username
 
@@ -92,26 +101,30 @@ class Token(dict):
             raise ValueError('Unknown token schema: {!r}'.format(mode))
         return realm_roles + client_roles, realm_roles, client_roles
 
-    def has_role(self, *roles, realm=None, client=None, client_id=True, mode='keycloak'):
+    def has_role(self, *roles, realm=None, client=None, client_id=True, mode='keycloak', **kw):
         available = self.get_roles(client_id=client_id, mode=mode)
         return all(
-            (not req or any(r in avail for r in util.aslist(req)))
+            (not req or any(_compare_roles(req, avail, asdict=False, **kw)))
             for req, avail in zip((roles, realm, client), available))
 
-    def check_roles(self, *roles, realm_only=None, client_only=None, client_id=True, mode='keycloak', required=False):
+    def check_roles(self, *roles, realm_only=None, client_only=None, client_id=True,
+                    asdict=False, mode='keycloak', required=False):
         all_roles, realm_roles, client_roles = self.get_roles(client_id=client_id, mode=mode)
-        if realm_only:
-            has_roles = [r in realm_roles for r in roles]
-        elif client_only:
-            has_roles = [r in client_roles for r in roles]
-        else:
-            has_roles = [r in all_roles for r in roles]
+        return _compare_roles(
+            roles, realm_roles if realm_only else client_roles if client_only else all_roles,
+            asdict=asdict, required=required)
 
-        if required:  # make sure we have at least one
-            required = any if required is True else required
-            if not required(has_roles):
-                raise Unauthorized()
-        return has_roles
+def _compare_roles(targets, existing, required=False, asdict=False):
+    targets, existing = util.aslist(targets), util.aslist(existing)
+    has_roles = {r: r in existing for r in targets}
+
+    if required:  # make sure we have at least one
+        required = any if required is True else required
+        if not required(has_roles.values()):
+            raise Unauthorized('Insufficient privileges. unable to: {}'.format(
+                [role for role, has in has_roles.items() if not has]))
+    return has_roles if asdict else [has_roles[r] for r in targets]
+
 
 def partdecode(x):
     return json.loads(base64.b64decode(x + '===').decode('utf-8'))
@@ -124,31 +137,3 @@ def mod_token(token, **kw):
     header, data, sig = Token.decode(token)
     data.update(**kw)
     return Token.encode(header, data, sig)
-
-
-
-class Role(list):
-    '''Define a set of roles: e.g.
-    >>> r, w, d = Role('read'), Role('write'), Role('delete')
-    >>> r.audio + r.any.spl + (r+w).meta + d('audio', 'spl')
-    ['read-audio', 'read-any-spl', 'read-any-meta', 'write-any-meta', 'delete-audio', 'delete-spl']
-    '''
-    def __init__(self, *xs):
-        super().__init__(xi for x in xs for xi in ([x] if isinstance(x, str) else x))
-
-    def __call__(self, *keys):
-        return Role('{}-{}'.format(i, ki) for i in self for k in keys for ki in Role(k))
-
-    def __add__(self, *xs):
-        return Role(self, *Role(*xs))
-
-    __getattr__ = lambda self, k: self(k)
-    __radd__ = lambda self, x: Role(x).join(self)
-
-# r, w, d = Role('read'), Role('write'), Role('delete')
-# GROUPS = {
-#     'sensor-engineer': r.audio + r.any.spl + (r+w+d).any.meta,
-#     'sensor': w.audio + w.spl + w.status,
-#     'agent': r.spl + w('audio', 'spl'),
-#     'participant': (r+w+d).audio,
-# }

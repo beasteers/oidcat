@@ -14,8 +14,9 @@ def test_env():
     os.environ[k2] = 'qqqqqq'
     assert env('b') == os.environ[k2]
 
-    assert env('a', 'b') == [os.environ[k1], os.environ[k2]]
-    assert env(asdf='a', zxcv='b') == {'asdf': os.environ[k1], 'zxcv': os.environ[k2]}
+    assert env.gather('a') == os.environ[k1]
+    assert env.gather('a', 'b') == [os.environ[k1], os.environ[k2]]
+    assert env.gather(asdf='a', zxcv='b') == {'asdf': os.environ[k1], 'zxcv': os.environ[k2]}
 
 
 def test_asurl():

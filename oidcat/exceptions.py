@@ -9,7 +9,8 @@ class RequestError(Exception):
     payload = {}
     headers = {}
     def __init__(self, message=None, status_code=None, headers=None, payload=None):
-        super().__init__(message or self.default_message)
+        self.message = message or self.default_message
+        super().__init__(self.message)
         self.status_code = status_code or self.status_code
         self.payload = dict(self.payload, **(payload or {}))
         self.headers = dict(self.headers, **(headers or {}))

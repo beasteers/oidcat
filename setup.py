@@ -5,7 +5,7 @@ NAME = 'oidcat'
 
 setuptools.setup(
     name=NAME,
-    version='0.3.0',
+    version='0.4.0',
     description='easy oidc client & server',
     long_description=open('README.md').read().strip(),
     long_description_content_type='text/markdown',
