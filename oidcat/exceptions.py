@@ -19,14 +19,26 @@ class Unauthorized(RequestError):
     status_code = 401
     default_message = 'Insufficient privileges'
     headers = {'WWW-Authenticate': 'Bearer'}
+    traceback_in_response = False
 
 
 def exc2response(exc):
-    traceback.print_exc(file=sys.stderr)
-    return flask.jsonify({
+    # build error payload
+    payload = {
         'error': True,
         'type': type(exc).__name__,
         'message': getattr(exc, 'message', None) or str(exc),
-        'traceback': traceback.format_exc(),
         **(getattr(exc, 'payload', None) or {})
-    }), getattr(exc, 'status_code', 500), getattr(exc, 'headers', {})
+    }
+
+    # allow arbitrary functionality
+    handle_payload = getattr(exc, 'handle_payload', None)
+    if handle_payload is not None:
+        handle_payload(payload)
+
+    if getattr(exc, 'traceback_in_response', not handle_payload):
+        traceback.print_exc(file=sys.stderr)
+        payload.setdefault('traceback', traceback.format_exc())
+    else:
+        sys.stderr.write('Raised Exception {}: {}\n')
+    return flask.jsonify(payload), getattr(exc, 'status_code', 500), getattr(exc, 'headers', {})
