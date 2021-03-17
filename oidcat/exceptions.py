@@ -40,5 +40,5 @@ def exc2response(exc):
         traceback.print_exc(file=sys.stderr)
         payload.setdefault('traceback', traceback.format_exc())
     else:
-        sys.stderr.write('Raised Exception {}: {}\n')
+        sys.stderr.write('Raised Exception {type}: {message}\n'.format(**payload))
     return flask.jsonify(payload), getattr(exc, 'status_code', 500), getattr(exc, 'headers', {})
