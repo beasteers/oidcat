@@ -1,6 +1,5 @@
 import sys
 import traceback
-import flask
 
 
 class RequestError(Exception):
@@ -23,6 +22,7 @@ class Unauthorized(RequestError):
 
 
 def exc2response(exc):
+    import flask
     # build error payload
     payload = {
         'error': True,
