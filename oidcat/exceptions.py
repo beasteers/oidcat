@@ -21,8 +21,7 @@ class Unauthorized(RequestError):
     traceback_in_response = False
 
 
-def exc2response(exc):
-    import flask
+def exc2response(exc, asresponse=False):
     # build error payload
     payload = {
         'error': True,
@@ -41,4 +40,8 @@ def exc2response(exc):
         payload.setdefault('traceback', traceback.format_exc())
     else:
         sys.stderr.write('Raised Exception {type}: {message}\n'.format(**payload))
-    return flask.jsonify(payload), getattr(exc, 'status_code', 500), getattr(exc, 'headers', {})
+
+    if asresponse:
+        import flask
+        payload = flask.jsonify(payload)
+    return payload, getattr(exc, 'status_code', 500), getattr(exc, 'headers', {})
