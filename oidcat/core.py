@@ -61,8 +61,8 @@ class Access:
         self.store = os.path.expanduser(store) if store else store
         self.store_pass = store_pass
         with util.saveddict(self.store) as cfg:
-            token = cfg.get('token')
-            refresh_token = cfg.get('refresh_token')
+            token = cfg.get('token') if token is None else None
+            refresh_token = cfg.get('refresh_token') if refresh_token is None else None
             self.username = self.username or cfg.get('username')
             self.password = self.password or cfg.get('password')
             if self.store_pass:
@@ -74,8 +74,8 @@ class Access:
                 client_id=client_id, client_secret=client_secret,
             )
 
-        self.token = Token.astoken(token, refresh_buffer) if token else None
-        self.refresh_token = Token.astoken(refresh_token) if refresh_token else None
+        self.token = Token.astoken(token, refresh_buffer) if token is not None else None
+        self.refresh_token = Token.astoken(refresh_token) if refresh_token is not None else None
 
         login = token is None if login is None else login
         if login and not self.refresh_token and self.username and self.password:
