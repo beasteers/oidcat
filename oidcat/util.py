@@ -14,6 +14,7 @@ DEFAULT_HOST = 'localhost'
 DEFAULT_PORT = 8000
 
 
+@functools.lru_cache()
 def get_well_known(url, realm=None, secure=None):
     '''Get the well known for an oauth2 server.
 

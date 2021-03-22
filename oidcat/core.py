@@ -23,7 +23,7 @@ class Session(requests.Session):
         if token == ...:
             token = self._inject_token
         if token:
-            tkn = self.access.require()
+            tkn = token if isinstance(token, Token) else self.access.require()
             if self._token_key:
                 kw.setdefault('data', {}).setdefault(self._token_key, str(tkn))
             else:
@@ -45,7 +45,7 @@ class Qs:
 class Access:
     def __init__(self, url, username=None, password=None,
                  client_id='admin-cli', client_secret=None,
-                 token=None, refresh_token=None, refresh_buffer=0, login=True,
+                 token=None, refresh_token=None, refresh_buffer=0, login=None,
                  sess=None, _wk=None, ask=False, store=False, store_pass=False):
         self.sess = sess or requests
         self.username = username
@@ -76,6 +76,8 @@ class Access:
 
         self.token = Token.astoken(token, refresh_buffer) if token else None
         self.refresh_token = Token.astoken(refresh_token) if refresh_token else None
+
+        login = token is None if login is None else login
         if login and not self.refresh_token and self.username and self.password:
             self.login()
 
