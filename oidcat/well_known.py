@@ -126,7 +126,7 @@ class WellKnown(dict):
 
 
 def well_known_url(url, realm=None, secure=True):
-    if not url.startswith('https://'):
+    if not url.startswith('https://') and not url.startswith('http://'):
         parts = url.split('@', 1)
         url = asurl('{}/auth/realms/{}/.well-known/openid-configuration'.format(
             parts[-1], realm or (parts[0] if len(parts) > 1 else 'master')), secure=secure)

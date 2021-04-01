@@ -7,11 +7,11 @@ class RequestError(Exception):
     default_message = None
     payload = {}
     headers = {}
-    def __init__(self, message=None, status_code=None, headers=None, payload=None):
+    def __init__(self, message=None, status_code=None, data=None, headers=None):
         self.message = message or self.default_message
         super().__init__(self.message)
         self.status_code = status_code or self.status_code
-        self.payload = dict(self.payload, **(payload or {}))
+        self.payload = dict(self.payload, **(data or {}))
         self.headers = dict(self.headers, **(headers or {}))
 
 class Unauthorized(RequestError):

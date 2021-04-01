@@ -38,3 +38,10 @@ def test_aslist():
 def test_color():
     txt = 'asdf'
     assert oidcat.util.color(txt, 'blue') == oidcat.util.color.blue(txt) == '\033[0;34m{}\033[0m'.format(txt)
+
+
+def test_exceptions():
+    out, code, headers = oidcat.exc2response(oidcat.Unauthorized(), asresponse=False)
+    assert code == 401
+    assert set(out) == {'error', 'message', 'type'}
+    assert headers == {'WWW-Authenticate': 'Bearer'}
