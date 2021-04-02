@@ -14,6 +14,15 @@ class RequestError(Exception):
         self.payload = dict(self.payload, **(data or {}))
         self.headers = dict(self.headers, **(headers or {}))
 
+    @classmethod
+    def from_response(cls, resp, defaults=None):
+        defaults = dict({
+            'type': 'Exception from server', 
+            'message': 'The server returned an error response.', 
+            'traceback': 'no traceback given in response: {}'.format(resp)
+        }, **(defaults or {}))
+        raise cls('{type}: {message}\n\nServer Traceback:\n{traceback}'.format(**dict(defaults, **resp)), data=resp)
+
 class Unauthorized(RequestError):
     status_code = 401
     default_message = 'Insufficient privileges'
