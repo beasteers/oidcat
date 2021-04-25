@@ -2,17 +2,38 @@ import sys
 import traceback
 
 
+class _SafeDict(dict):
+    def __missing__(self, key):
+        return ''#'{' + str(key) + '}'
+
+def safe_format(msg, data=None, **kw):
+    return (msg or '').format_map(_SafeDict(data or {}, **kw))
+
 class RequestError(Exception):
     status_code = 500
-    default_message = None
-    payload = {}
-    headers = {}
-    def __init__(self, message=None, status_code=None, data=None, headers=None):
+    payload = None
+    headers = None
+    def __init__(self, message=None, status_code=None, data=None, headers=None, format=False):
+        self.status_code = status_code or self.status_code
+        self.payload = dict(self.payload or {}, **(data or {}))
+        self.headers = dict(self.headers or {}, **(headers or {}))
+        # get message
+        if format:
+            message = safe_format(message, self.payload) or None
         self.message = message or self.default_message
         super().__init__(self.message)
-        self.status_code = status_code or self.status_code
-        self.payload = dict(self.payload, **(data or {}))
-        self.headers = dict(self.headers, **(headers or {}))
+
+    @property
+    def default_message(self):
+        if 'message' in self.payload:
+            msg = '{type}: {message}' if 'type' in self.payload else '{message}'
+            if 'traceback' in self.payload:
+                msg += '\n\nRequest Traceback:\n{traceback}'
+            return safe_format(msg, **self.payload).strip()
+
+        elif self.payload:
+            return 'Error with unknown format: {}'.format(self.payload)
+        return 'error {}'.format(self.status_code)
 
     @classmethod
     def from_response(cls, resp, defaults=None):

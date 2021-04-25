@@ -31,6 +31,9 @@ class Session(requests.Session):
         self._inject_token = inject_token
         self._token_key = token_key
 
+    def __repr__(self):
+        return '<{}({!r})>'.format(self.__class__.__qualname__, self.access)
+
     def request(self, *a, token=..., **kw):
         if token == ...:
             token = self._inject_token
@@ -60,8 +63,11 @@ class Qs:
 class Access:
     def __init__(self, url, username=None, password=None,
                  client_id='admin-cli', client_secret=None,
-                 token=None, refresh_token=None, refresh_buffer=8, login=None,
-                 sess=None, _wk=None, ask=False, store=False, store_pass=False):
+                 token=None, refresh_token=None, 
+                 refresh_buffer=8, refresh_token_buffer=20, 
+                 login=None, offline=None, ask=False, 
+                 store=False, store_pass=False,
+                 sess=None, _wk=None):
         '''Controls access, making sure you always have a valid token.
 
         You must specify one of:
@@ -90,8 +96,10 @@ class Access:
                 It is set at 8s which is almost always longer than the time between making
                 a request and the server authenticating the token (which usually happens
                 at the beginning of the route).
+            refresh_token_buffer (float): equivalent to `refresh_buffer`, but for the refresh token.
             login (bool): whether we should attempt to login. By default, this will be true
                 unless only an access token is specified.
+            offline (bool): should we request offline tokens?
             sess (Session): an existing session object.
             ask (bool): if we don't have any valid credentials, should we prompt for
                 a username and password? Useful for cli apps.
@@ -114,20 +122,27 @@ class Access:
         self.store = os.path.expanduser(store) if store else store
         self.store_pass = store_pass
         with util.saveddict(self.store) as cfg:
-            token = cfg.get('token') if token is None else None
-            refresh_token = cfg.get('refresh_token') if refresh_token is None else None
+            # read username / password from config
             self.username = self.username or cfg.get('username')
             self.password = self.password or cfg.get('password')
             if self.store_pass:
                 cfg['username'] = self.username
                 cfg['password'] = self.password
 
+            # read tokens from config
+            if token is None and refresh_token is None:
+                token = Token.astoken(cfg.get('token'), refresh_buffer) or None
+                refresh_token = Token.astoken(cfg.get('refresh_token'), refresh_token_buffer) or None
+
             self.well_known = cfg['well_known'] = WellKnown(
                 _wk or cfg.get('well_known') or get_well_known(url),
                 client_id=client_id, client_secret=client_secret)
 
-        self.token = Token.astoken(token, refresh_buffer) if token is not None else None
-        self.refresh_token = Token.astoken(refresh_token) if refresh_token is not None else None
+        self.token = Token.astoken(token, refresh_buffer)
+        self.refresh_token = Token.astoken(refresh_token)
+        self.offline = (
+            'offline_access' in self.refresh_token.get('scope', '')
+        ) if offline is None else offline
 
         if login is None:  # by default, handle login depending on inputs
             login = token is None or self.refresh_token is not None
@@ -135,12 +150,14 @@ class Access:
             self.login()
 
     def __repr__(self):
-        return 'Access(\n{})'.format(''.join('  {}={!r},\n'.format(k, v) for k, v in (
+        return 'Access(\n{})'.format(''.join('  {}={!r},\n'.format(k, v) if k.strip() else '\n' for k, v in (
             ('username', self.username),
             ('client', self.client_id),
             ('valid', bool(self.token)),
             ('refresh_valid', bool(self.refresh_token)),
+            # ('',''),  # hack for newline
             ('token', self.token),
+            # ('',''),  # hack for newline
             ('refresh_token', self.refresh_token),
         )))
 
@@ -166,13 +183,14 @@ class Access:
                     self.login()
         return self.token
 
-    def login(self, username=None, password=None, ask=None, offline=False):
+    def login(self, username=None, password=None, ask=None, offline=None):
         '''Login from your authentication provider and acquire a token.'''
+        offline = self.offline if offline is None else offline
         logged_in = False  # in case the refresh token fails
         if self.refresh_token:
             try:
                 self.token, self.refresh_token = self.well_known.refresh_token(
-                    self.refresh_token, self.refresh_buffer)
+                    self.refresh_token, self.refresh_buffer, offline=offline)
                 logged_in = bool(self.token)
             except RequestError as e:
                 if '(invalid_grant)' not in str(e):
@@ -204,6 +222,7 @@ class Access:
         '''Logout from your authentication provider.'''
         self.well_known.end_session(self.token, self.refresh_token)
         self.token = self.refresh_token = None
+        self.username = self.password = None
         if self.store:
             with util.saveddict(self.store) as cfg:
                 cfg['token'] = cfg['refresh_token'] = None

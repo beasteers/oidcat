@@ -1,6 +1,6 @@
 import requests
 from requests.auth import HTTPBasicAuth
-from .util import asurl
+from .util import asurl, aslist
 from . import RequestError, Token
 
 
@@ -83,7 +83,10 @@ class WellKnown(dict):
     # def authorize(self):
     #     pass
 
-    def get_token(self, username, password=None, refresh_buffer=0, offline=False):
+    def get_token(self, username, password=None, refresh_buffer=0, offline=False, scope=None):
+        scope = aslist(scope)
+        if offline:
+            scope.append('offline_access')
         resp = check_error(self.sess.post(
             self['token_endpoint'],
             data={
@@ -98,7 +101,10 @@ class WellKnown(dict):
         refresh_token = Token(resp['refresh_token'])
         return token, refresh_token
 
-    def refresh_token(self, refresh_token, refresh_buffer=0):
+    def refresh_token(self, refresh_token, refresh_buffer=0, offline=False, scope=None):
+        scope = aslist(scope)
+        if offline:
+            scope.append('offline_access')
         resp = check_error(self.sess.post(
             self['token_endpoint'],
             data={

@@ -45,3 +45,10 @@ def test_exceptions():
     assert code == 401
     assert set(out) == {'error', 'message', 'type'}
     assert headers == {'WWW-Authenticate': 'Bearer'}
+
+    exc = oidcat.RequestError()
+    assert str(exc) == 'error 500'
+    exc = oidcat.RequestError(data={'type': 'Excpt', 'message': 'blah'})
+    assert str(exc) == 'Excpt: blah'
+    exc = oidcat.RequestError(data={'type': 'Excpt', 'message': 'blah', 'traceback': 'asdfasdfasdf'})
+    assert str(exc) == 'Excpt: blah\n\nRequest Traceback:\nasdfasdfasdf'

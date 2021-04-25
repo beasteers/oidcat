@@ -24,7 +24,9 @@ class Token(dict):
         self._valid = valid
 
     def __repr__(self):
-        return 'Token({})'.format(super().__repr__())
+        if self.token is None:
+            return 'Token(None)'
+        return 'Token(time_left={}, {})'.format(self.time_left, super().__repr__())
 
     def __str__(self):
         return str(self.token)
@@ -46,7 +48,10 @@ class Token(dict):
 
     @property
     def time_left(self):
-        return self.expires - datetime.datetime.now() if self.expires else self._FOREVER_
+        return (
+            self.expires - datetime.datetime.now() if self.expires else 
+            self._FOREVER_ if self.token else 
+            datetime.timedelta(seconds=0))
 
     @property
     def valid(self):
