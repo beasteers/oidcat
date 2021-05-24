@@ -6,6 +6,7 @@ import traceback
 import requests
 import urllib
 from . import RequestError
+from .exceptions import safe_format
 
 
 HOST_KEY = 'VIRTUAL_HOST'

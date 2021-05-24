@@ -45,6 +45,8 @@ def test_exceptions():
     assert code == 401
     assert set(out) == {'error', 'message', 'type'}
     assert headers == {'WWW-Authenticate': 'Bearer'}
+    out, code, headers = oidcat.exc2response(oidcat.Unauthorized(), asresponse=False, include_tb=True)
+    assert set(out) == {'error', 'message', 'type', 'traceback'}
 
     exc = oidcat.RequestError()
     assert str(exc) == 'error 500'
@@ -52,3 +54,7 @@ def test_exceptions():
     assert str(exc) == 'Excpt: blah'
     exc = oidcat.RequestError(data={'type': 'Excpt', 'message': 'blah', 'traceback': 'asdfasdfasdf'})
     assert str(exc) == 'Excpt: blah\n\nRequest Traceback:\nasdfasdfasdf'
+
+    out, code, headers = oidcat.exc2response(oidcat.Unauthorized(), asresponse=False)
+    err = oidcat.RequestError.from_response(out)
+    assert 'Unauthorized: Insufficient privileges' in str(err)

@@ -95,7 +95,7 @@ class WellKnown(dict):
                 'grant_type': 'password',
                 'username': username,
                 'password': password,
-                **({'scope': 'offline_access'} if offline else {})
+                **({'scope': scope} if scope else {})
             }).json(), 'access token')
         token = Token(resp['access_token'], refresh_buffer)
         refresh_token = Token(resp['refresh_token'])
@@ -140,6 +140,9 @@ def well_known_url(url, realm=None, secure=True):
 
 def check_error(resp, item='request'):
     if 'error' in resp:
-        raise RequestError(
-            'Error getting {item}: ({error}) {error_description}'.format(item=item, **resp))
+        try:
+            err_msg = '({error}) {error_description}'.format(**resp)
+        except KeyError:
+            err_msg = str(resp)
+        raise RequestError('Error getting {}: {}'.format(item, err_msg))
     return resp

@@ -10,11 +10,13 @@ import os
 import json
 import functools
 import flask
-from flask import request
+from flask import request, current_app, g
 import flask_oidc
 import oidcat
 from . import util, Unauthorized, RequestError, exc2response
 from .token import Token
+
+log = flask_oidc.logger
 
 
 class OpenIDConnect(flask_oidc.OpenIDConnect):
@@ -32,9 +34,46 @@ class OpenIDConnect(flask_oidc.OpenIDConnect):
         app.config.setdefault('OIDC_OAUTH2_PROVIDER', 'keycloak')
         app.errorhandler(RequestError)(exc2response)
 
+    def _validate_token(self, token, scopes_required=None):
+        '''Make sure the token is considered valid by the auth server and that it has the 
+        required scopes/audience.'''
+        # NOTE: refactored from flask_oidc to make the logic clearer and error messages more helpful
+        if not token:
+            return 'Missing token'
+
+        # try to introspect the token
+        try:
+            token_info = self._get_token_info(token)
+            if 'error' in token_info:
+                return 'Error received when querying token info: {}'.format(token_info)
+        except Exception as e:
+            return 'Error while trying to query token info: {}'.format(e)
+        
+        # see if the token is considered active
+        valid_token = token_info.get('active', False)
+        if not valid_token:
+            return 'Token is not active.'
+
+        # validate the token audience
+        if 'aud' in token_info and current_app.config['OIDC_RESOURCE_CHECK_AUD']:
+            valid_audience = self.client_secrets['client_id'] in util.aslist(token_info['aud'])
+            if not valid_audience:
+                # log.error('Refused token because of invalid audience')
+                return 'Refused token because of invalid audience'
+
+        # check that it has the required scopes
+        scopes_required = set(util.aslist(scopes_required))
+        token_scopes = set(token_info.get('scope', '').split(' ')) if valid_token else set()
+        has_required_scopes = scopes_required.issubset(token_scopes)
+        if not has_required_scopes:
+            return 'Token does not have required scopes'
+
+        # if everything is good, store the token info
+        g.oidc_token_info = token_info
+        return True
+
     def accept_token(self, scopes=None, role=None, realm_role=None, client_role=None,
                      required=True, checks=None):
-
         def wrapper(view_func):
             @functools.wraps(view_func)
             def decorated(*a, **kw):
@@ -80,11 +119,11 @@ class OpenIDConnect(flask_oidc.OpenIDConnect):
                 validity = str(e)
             if validity is True and not all(chk(token) for chk in checks or ()):
                 validity = 'Insufficient privileges.'
-        token.valid = True if validity is True else Unauthorized(validity)
+        token.valid = True if validity is True else Unauthorized(str(validity))
 
         # on no! I'm not supposed to talk to strangers!
         if required and validity is not True:
-            raise Unauthorized(validity)
+            raise Unauthorized(str(validity))
         return token
 
     def get_access_token(self):

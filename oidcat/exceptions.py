@@ -36,13 +36,16 @@ class RequestError(Exception):
         return 'error {}'.format(self.status_code)
 
     @classmethod
-    def from_response(cls, resp, defaults=None):
+    def from_response(cls, resp, additional_message=None, defaults=None):
         defaults = dict({
             'type': 'Exception from server', 
             'message': 'The server returned an error response.', 
             'traceback': 'no traceback given in response: {}'.format(resp)
         }, **(defaults or {}))
-        raise cls('{type}: {message}\n\nServer Traceback:\n{traceback}'.format(**dict(defaults, **resp)), data=resp)
+        # TODO: drop server traceback if none exists
+        return cls(
+            ('{} - '.format(additional_message) if additional_message else '') + 
+            '{type}: {message}\n\nServer Traceback:\n{traceback}'.format(**dict(defaults, **resp)), data=resp)
 
 class Unauthorized(RequestError):
     status_code = 401
@@ -51,7 +54,7 @@ class Unauthorized(RequestError):
     traceback_in_response = False
 
 
-def exc2response(exc, asresponse=False):
+def exc2response(exc, asresponse=False, include_tb=None, show_tb=True):
     # build error payload
     payload = {
         'error': True,
@@ -65,11 +68,16 @@ def exc2response(exc, asresponse=False):
     if handle_payload is not None:
         handle_payload(payload)
 
-    if getattr(exc, 'traceback_in_response', not handle_payload):
-        traceback.print_exc(file=sys.stderr)
+    # possibly add traceback
+    if include_tb is None:
+        include_tb = getattr(exc, 'traceback_in_response', not handle_payload)
+    if include_tb:
         payload.setdefault('traceback', traceback.format_exc())
-    else:
+
+    if show_tb == 'short':
         sys.stderr.write('Raised Exception {type}: {message}\n'.format(**payload))
+    elif show_tb:
+        traceback.print_exc(file=sys.stderr)
 
     if asresponse:
         import flask

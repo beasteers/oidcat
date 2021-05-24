@@ -76,6 +76,7 @@ def sess():
 
 @pytest.fixture
 def bearer(sess):
+    print(dict(sess.access.token))
     yield {'Authorization': 'Bearer {}'.format(sess.access.token)}
 
 
@@ -92,7 +93,9 @@ def test_inaccessible(server, sess, bearer):
     assert server.get('/inaccessible', headers=bearer).status_code == 401
 
 def test_accessible(server, sess, bearer):
+    print('accessible 1')
     assert server.get('/accessible').status_code == 401
+    print('accessible 2')
     assert getitem2(server.get('/accessible', headers=bearer).get_json(), 'success') is True
 
 def test_inaccessible2(server, sess, bearer):
