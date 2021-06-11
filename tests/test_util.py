@@ -30,9 +30,10 @@ def test_asurl():
 
 
 def test_aslist():
+    assert oidcat.util.aslist(None) == []
     assert oidcat.util.aslist(5) == [5]
     assert oidcat.util.aslist([5]) == [5]
-    assert oidcat.util.aslist((5,)) == (5,)
+    assert oidcat.util.aslist((5,)) == [5]
 
 
 def test_color():

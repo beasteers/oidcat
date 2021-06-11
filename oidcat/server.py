@@ -1,8 +1,10 @@
-'''
+'''Server-Side Components for Protecting Resources via a Flask app.
 
-@oidc.accept_token(keycloak_role='sensor')
-def get():
-    oidc.require(oidc.token)
+.. code-block:: python
+
+    @oidc.accept_token(keycloak_role='sensor')
+    def get():
+        oidc.require(oidc.token)
 
 
 '''
@@ -88,6 +90,11 @@ class OpenIDConnect(flask_oidc.OpenIDConnect):
 
     @property
     def token(self):
+        '''Get the current token object.
+        
+        Returns:
+            token (Token): the token object. May be empty (token.token is None).
+        '''
         token = getattr(flask.g, 'oidc_token_obj', None)
         if token is None:
             token = (
@@ -98,12 +105,36 @@ class OpenIDConnect(flask_oidc.OpenIDConnect):
             if token:
                 token = Token(token)
             flask.g.oidc_token_obj = token
-        return token if token is not None else Token()
+        token = token if token is not None else Token()
+        token._format = flask.current_app.config['OIDC_OAUTH2_PROVIDER']
+        return token
 
     def valid_token(self, *roles, scopes=None, realm_role=None, client_role=None,
                     client_id=True, required=True, checks=None, token=None):
+        '''Check if a token is valid.
+        
+        Arguments:
+            *roles (str): roles to check.
+            scopes (list, str, None): scopes to check for.
+            realm_role (list, str, None): realm roles to check for.
+            client_role (list, str, None): client roles to check for.
+            client_id (list, str, None): the client ID(s) to check. By default, will 
+                check the current client.
+            required (bool, callable): Are the roles required? If True, then the token 
+                should have at least one role. To require all roles, do ``require=all``.
+            checks (list[callable]): a list of additional checks to do on the token. 
+                Receives the Token object as the only argument.
+            token (Token, str, None): Gives you the option to pass your own external token.
+
+        Returns:
+            token (Token): The token object. If invalid, bool(token) will evaluate to False.
+
+        Raises:
+            oidcat.UnauthorizedError if required is True and the token is invalid.
+        '''
         # check if token is valid
         token = self.token if token is None else Token.astoken(token)
+        token._format = flask.current_app.config['OIDC_OAUTH2_PROVIDER']
         validity = token.validity
         if validity is True and not token.token:
             validity = 'No token'  # redundant
@@ -138,9 +169,7 @@ class OpenIDConnect(flask_oidc.OpenIDConnect):
     def has_role(self, *roles, realm=None, client=None, client_id=True, **kw):
         if client_id is True:
             client_id = self.client_secrets['client_id']
-        return self.token.has_role(
-            *roles, realm=realm, client=client, client_id=client_id,
-            mode=flask.current_app.config['OIDC_OAUTH2_PROVIDER'], **kw)
+        return self.token.has_role(*roles, realm=realm, client=client, client_id=client_id, **kw)
 
     def require_role(self, *roles, **kw):
         return self.require(self.has_role(*roles, **kw))

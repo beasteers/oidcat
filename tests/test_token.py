@@ -83,7 +83,9 @@ def test_token_roles():
     realm = TOKEN_DATA['realm_access']['roles']
     client = TOKEN_DATA['resource_access']['account']['roles']
     # test any role check
-    assert t.get_roles(client_id='account') == (realm+client, realm, client)
+    assert t.roles == set(realm + client)
+    assert t.realm_roles == set(realm)
+    assert t.client_roles('account') == set(client)
     assert t.has_role(realm[0], client_id='account')
     assert t.has_role(realm[0], GIBBERISH, client_id='account')
     assert not t.has_role(GIBBERISH, client_id='account')
@@ -96,6 +98,7 @@ def test_token_roles():
     assert not t.has_role(client=GIBBERISH, client_id='account')
 
     # TODO: be more systematic
+    print(realm)
     assert t.check_roles(*realm) == [True] * len(realm)
     assert t.check_roles(*realm, realm_only=True) == [True] * len(realm)
     assert t.check_roles(*realm, required=True) == [True] * len(realm)

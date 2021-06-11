@@ -1,33 +1,94 @@
+'''Provides interfaces for querying a server protected by an authorization provider.
+
+.. code-block:: python
+
+    import oidcat
+
+    sess = oidcat.Session(
+        'auth.myserver.com', 'myusername', 'mysecretpassword', 
+        client_id='my-client-id')
+
+    # lets go le$beans les go!
+    resp = sess.get('https://api.myserver.com/protected/endpoint')
+    resp.raise_for_status()
+    data = resp.json()
+
+    print('yay dis some good data:', data)
+
+Whereas with ``requests``, you'd see:
+
+.. code-block:: python
+
+    import requests
+
+    # making just a plain old session object
+    sess = requests.Session()
+
+    # trying to access protected endpoints gonna make u sad
+    resp = sess.get('https://api.myserver.com/protected/endpoint')
+    resp.raise_for_status()  # Raises 401 Unauthorized error
+    data = resp.json()  # no data :'(    
+
+
+'''
 import os
+import json
 import threading
 import requests
-from requests.auth import HTTPBasicAuth
+# from requests.auth import HTTPBasicAuth
 from .token import Token
 from .well_known import WellKnown
 from . import util, RequestError
 from .util import get_well_known
 
+__all__ = ['Session', 'Access']
 
 
 class Session(requests.Session):
-    def __init__(self, well_known_url, username=None, password=None,
+    def __init__(self, url, username=None, password=None,
                  client_id='admin-cli', client_secret=None,
                  inject_token=True, token_key=None, **kw):
-        '''A requests.Session object that implicitly handles 0Auth2 authentication
+        '''A ``requests.Session`` object that implicitly handles 0Auth2 authentication
         for services like Keycloak.
 
+        This behaves exactly like a ``requests.Session`` object, except that it contains a token manager 
+        and bundles the token in an Authorization header of each request.
+
+        .. note::
+            This is just a thin wrapper that incorporates the functionality of the ``Access`` object into python ``requests``.
+            This means that it's relatively trivial to extend this code to support other querying libraries 
+            (though I don't really know if there's a need to cuz I feel like requests covers everything pretty well. Maybe ``urllib``? idk).
+
+        .. code-block:: python
+            
+            # create just like requests.Session
+            sess = oidcat.Session('auth.myserver.com', 'myusername', 'secretpassword')
+            # and everything is auto-magically authenticated !
+            sess.get('api.myserver.com/api/something/secret').json()
+
+            # if you don't want to send a token for a specific endpoint (for whatever reason), 
+            # you can disable it
+            sess.get('otherserver.com/i/cant/have/a/token', token=False).json()
+
+            # and if you don't want to add it by default, 
+            # you can disable automatic token injection
+            sess = oidcat.Session(
+                'auth.myserver.com', 'myusername', 'secretpassword', 
+                inject_token=False)
+
         Arguments:
-            *a, **kw: See `Access` for information on arguments.
+            *a: See ``Access`` for information on arguments.
             inject_token (bool): whether to use tokens on all requests by default.
                 By default, this is True. To disable/enable on a request by request basis,
                 pass `token=False` or `True` depending.
             token_key (str): if you want to pass the request using a query parameter,
                 then set this to the key you want to use. Typical value is 'token'.
                 By default it will use Bearer Token Authorization.
+            **kw: See ``Access`` for information on arguments.
         '''
         super().__init__()
         self.access = Access(
-            well_known_url, username, password, client_id, client_secret, sess=self, **kw)
+            url, username, password, client_id, client_secret, sess=self, **kw)
         self._inject_token = inject_token
         self._token_key = token_key
 
@@ -46,13 +107,19 @@ class Session(requests.Session):
         return super().request(*a, **kw)
 
     def login(self, *a, **kw):
+        '''Login to the authorization server and get an access token.'''
         return self.access.login(*a, **kw)
 
     def logout(self, *a, **kw):
+        '''Logout of the authorization server.'''
         return self.access.logout(*a, **kw)
 
+    def require_login(self, *a, **kw):
+        '''If not logged in, log back in.'''
+        return self.require(*a, **kw)
 
-class Qs:
+
+class _Qs:
     BASE_HOST = 'What is the base domain of your server (e.g. myapp.com - (assumed services: auth.myapp.com, api.myapp.com))?'
     USERNAME = 'What is your username?'
     PASSWORD = 'What is your password?'
@@ -60,7 +127,9 @@ class Qs:
 
 # NOTE: this is separated so that it doesn't get tangled with the Session object and
 #       can be reused outside of just requests.
+
 class Access:
+    _discard_credentials = False
     def __init__(self, url, username=None, password=None,
                  client_id='admin-cli', client_secret=None,
                  token=None, refresh_token=None, 
@@ -70,10 +139,20 @@ class Access:
                  sess=None, _wk=None):
         '''Controls access, making sure you always have a valid token.
 
-        You must specify one of:
-         - username and password - if you specify this, nothing expires.
-         - token - this typically has a short lifespan so it's for quick operations where you have the token.
-         - refresh_token - if you already have a refresh token, session only lasts the life of a refresh token.
+        In order to have authenticated requests, you must specify one of:
+        
+        - ``username`` and ``password`` - if you specify this, it will functionally never expire. 
+          This is because we keep the username and password in memory so that it can be used in scripts that run indefinitely.
+        - ``token`` - this typically has a short lifespan so it's for quick operations where you have the token.
+          Usually you wouldn't need to do this, but it's possible if you really want to!
+        - ``refresh_token`` - if you already have a refresh token, session only lasts the life of a refresh token.
+          This is a potentially safer method if you need to run something under a few hours (or whatever your 
+          refresh token lifespan is).
+
+        A potential other solution for long lived tokens is to use an offline token. You use your 
+        username and password once and it will get an offline refresh token that can be stored and used 
+        for extended or indefinite periods of time (depending on your auth server settings). 
+        To use offline tokens, just use ``offline=True``.
 
         Arguments:
             url (str): The url for your authentication server.
@@ -104,13 +183,9 @@ class Access:
             ask (bool): if we don't have any valid credentials, should we prompt for
                 a username and password? Useful for cli apps.
             store (bool): should we store tokens and urls to disk? (persistance between cli calls)
-            store_pass (bool): should we store credentials to disk? (like save your
-                username/password forever - UNSAFE)
 
         '''
         self.sess = sess or requests
-        self.username = username
-        self.password = password
         self.client_id = client_id
         self.client_secret = client_secret
 
@@ -120,14 +195,14 @@ class Access:
         # possibly load token from file
         self.ask = ask
         self.store = os.path.expanduser(store) if store else store
-        self.store_pass = store_pass
+        # self.store_pass = store_pass
         with util.saveddict(self.store) as cfg:
-            # read username / password from config
-            self.username = self.username or cfg.get('username')
-            self.password = self.password or cfg.get('password')
-            if self.store_pass:
-                cfg['username'] = self.username
-                cfg['password'] = self.password
+            # # read username / password from config
+            # username = self.username or cfg.get('username')
+            # self.password = self.password or cfg.get('password')
+            # if self.store_pass:
+            #     cfg['username'] = self.username
+            #     cfg['password'] = self.password
 
             # read tokens from config
             if token is None and refresh_token is None:
@@ -138,6 +213,10 @@ class Access:
                 _wk or cfg.get('well_known') or get_well_known(url),
                 client_id=client_id, client_secret=client_secret)
 
+        # self._discard_credentials = discard_credentials
+        if not self._discard_credentials:
+            self.username = username
+            self.password = password
         self.token = Token.astoken(token, refresh_buffer)
         self.refresh_token = Token.astoken(refresh_token)
         self.offline = (
@@ -146,10 +225,11 @@ class Access:
 
         if login is None:  # by default, handle login depending on inputs
             login = token is None or self.refresh_token is not None
-        if login and not self.token and self.username and self.password:
-            self.login()
+        if login and not self.token and username and password:
+            self.login(username, password)
 
     def __repr__(self):
+        '''Get a comprehensive view of the contents of the Access object.'''
         return 'Access(\n{})'.format(''.join('  {}={!r},\n'.format(k, v) if k.strip() else '\n' for k, v in (
             ('username', self.username),
             ('client', self.client_id),
@@ -162,9 +242,11 @@ class Access:
         )))
 
     def __str__(self):
+        '''Get the token as a string.'''
         return str(self.token)
 
     def __bool__(self):
+        '''Evaluates True if the token is valid.'''
         return bool(self.token)
 
     def require(self):
@@ -184,7 +266,21 @@ class Access:
         return self.token
 
     def login(self, username=None, password=None, ask=None, offline=None):
-        '''Login from your authentication provider and acquire a token.'''
+        '''Login from your authentication provider and acquire a token.
+        
+        Arguments:
+            username (str): your username. This value is stored on the object so 
+                subsequent login calls do not need to present it.
+            password (str): your password. This value is stored on the object so 
+                subsequent login calls do not need to present it.
+            ask (bool): if no username/password is present, should we prompt for 
+                one thru the terminal? By default it will be ``False``, unless 
+                ``ask=True`` was provided to __init__().
+            offline (bool): should we request an offline token? These are usually
+                much longer lived and allows you to have long term access without 
+                having to store a username and password on disk. By default it will 
+                be ``False``, unless ``offline=True`` was provided to __init__().
+        '''
         offline = self.offline if offline is None else offline
         logged_in = False  # in case the refresh token fails
         if self.refresh_token:
@@ -199,13 +295,14 @@ class Access:
         
         if not logged_in:
             ask = self.ask if ask is None else ask
-            username = self.username = (
-                username or self.username or ask and util.ask(Qs.USERNAME))
-            password = self.password = (
-                password or self.password or ask and util.ask(Qs.PASSWORD, secret=True))
+            username = username or self.username or ask and util.ask(_Qs.USERNAME)
+            password = password or self.password or ask and util.ask(_Qs.PASSWORD, secret=True)
             if not username and not self.refresh_token:
-                raise ValueError('Username not provided for login at {}'.format(
+                raise ValueError('No username provided for login at {}'.format(
                     self.well_known['token_endpoint']))
+            
+            if not self._discard_credentials:
+                self.username, self.password = username, password
 
             self.token, self.refresh_token = self.well_known.get_token(
                 username, password, self.refresh_buffer, offline=offline)
@@ -214,9 +311,9 @@ class Access:
             with util.saveddict(self.store) as cfg:
                 cfg['token'] = str(self.token)
                 cfg['refresh_token'] = str(self.refresh_token)
-                if self.store_pass:
-                    cfg['username'] = self.username
-                    cfg['password'] = self.password
+                # if self.store_pass:
+                #     cfg['username'] = self.username
+                #     cfg['password'] = self.password
 
     def logout(self):
         '''Logout from your authentication provider.'''
@@ -243,3 +340,46 @@ class Access:
     def token_info(self):
         '''Get token info from your authentication provider.'''
         return self.well_known.tokeninfo(self.require())
+
+
+
+def response_json(resp):
+    '''Get the json response from the object, and raise if it's an error.
+    It also detects 502 Bad Gateway errors which are returned by nginx 
+    commonly when server configurations change.
+
+    .. code-block:: python
+
+        data = oidcat.response_json(sess.get('blah.com/api/mydata))
+    
+    Arguments:
+        resp (requests.Response): The API server response.
+
+    Returns:
+        data (any): the JSON-decoded response.
+
+    Raises:
+        oidcat.RequestError if the response is a ``dict`` and has ``'error' in data``.
+    '''
+    try:
+        data = resp.json()
+    except json.decoder.JSONDecodeError as e:
+        # can't be parsed as json - so let's see what it gave us
+        txt = resp.text
+        # 502 Bad Gateway errors are triggered by nginx
+        if '502 Bad Gateway' in txt:
+            data = {'error': True, 'type': 'BadGateway', 'code': 502, 'message': txt}
+        else:
+            raise json.decoder.JSONDecodeError(
+                'Could not decode response ({}): \n{}'.format(e, txt))
+
+    # check for error messages
+    if isinstance(data, dict):
+        if 'error' in data:
+            raise RequestError(data)
+    return data
+
+
+Session.login.__doc__ = Access.login.__doc__
+Session.logout.__doc__ = Access.logout.__doc__
+Session.require_login.__doc__ = Access.require.__doc__

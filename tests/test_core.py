@@ -1,6 +1,7 @@
 import os
 import pytest
 
+import oidcat
 import oidcat.server
 
 
@@ -16,7 +17,13 @@ def getitem2(x, key):
     try:
         return x[key]
     except KeyError:
+        if 'error' in x:
+            raise oidcat.RequestError.from_response(x)
         raise KeyError("Could not get key '{}' from {}".format(key, x))
+
+def dump(x):
+    import json
+    return json.dumps(x, indent=4, sort_keys=True)
 
 
 @pytest.fixture(scope='module')
@@ -27,6 +34,7 @@ def server():
     app.config.update(
         OIDC_CLIENT_SECRETS=oidcat.util.with_well_known_secrets_file(
             HOST, CLIENT_ID, CLIENT_SECRET),
+        PROPAGATE_EXCEPTIONS=True,
         SECRET_KEY='blagh')
 
     oidc = oidcat.server.OpenIDConnect(app, '/tmp/creds.db')
@@ -61,6 +69,10 @@ def server():
         token.check_roles(TEST_MISSING_ROLE, required=True)
         return flask.jsonify({'success': True})
 
+    @app.errorhandler(Exception)
+    def err_handle(e):
+        return oidcat.exc2response(e, asresponse=True)
+
     with app.test_client() as client:
         yield client
         # with app.app_context():
@@ -76,7 +88,10 @@ def sess():
 
 @pytest.fixture
 def bearer(sess):
-    print(dict(sess.access.token))
+    # print(sess)
+    print(dump(dict(sess.access.well_known)))
+    print(dump(dict(sess.access.token)))
+    print(sess.access.well_known.client_id, type(sess.access.well_known.client_secret))
     yield {'Authorization': 'Bearer {}'.format(sess.access.token)}
 
 

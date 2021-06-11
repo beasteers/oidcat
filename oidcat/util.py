@@ -15,66 +15,23 @@ DEFAULT_HOST = 'localhost'
 DEFAULT_PORT = 8000
 
 
-@functools.lru_cache()
-def get_well_known(url, realm=None, secure=None):
-    '''Get the well known for an oauth2 server.
-
-    These are equivalent:
-     - auth.myproject.com
-     - master@auth.myproject.com
-     - https://auth.myproject.com/auth/realms/master/.well-known/openid-configuration
-
-    For another realm, you can do:
-     - mycustom@auth.myproject.com
-
-     https://auth.myproject.com/auth/realms/master/.well-known/openid-configuration
-     {
-         "issuer": "https://auth.myproject.com/auth/realms/master",
-         "authorization_endpoint": "https://auth.myproject.com/auth/realms/master/protocol/openid-connect/auth",
-         "token_endpoint": "https://auth.myproject.com/auth/realms/master/protocol/openid-connect/token",
-         "token_introspection_endpoint": "https://auth.myproject.com/auth/realms/master/protocol/openid-connect/token/introspect",
-         "introspection_endpoint": "https://auth.myproject.com/auth/realms/master/protocol/openid-connect/token/introspect"
-         "userinfo_endpoint": "https://auth.myproject.com/auth/realms/master/protocol/openid-connect/userinfo",
-         "end_session_endpoint": "https://auth.myproject.com/auth/realms/master/protocol/openid-connect/logout",
-         "jwks_uri": "https://auth.myproject.com/auth/realms/master/protocol/openid-connect/certs",
-         "registration_endpoint": "https://auth.myproject.com/auth/realms/master/clients-registrations/openid-connect",
-
-         "check_session_iframe": "https://auth.myproject.com/auth/realms/master/protocol/openid-connect/login-status-iframe.html",
-         "grant_types_supported": ["authorization_code", "implicit", "refresh_token", "password", "client_credentials"],
-         "response_types_supported": ["code", "none", "id_token", "token", "id_token token", "code id_token", "code token", "code id_token token"],
-         "subject_types_supported": ["public", "pairwise"],
-         "id_token_signing_alg_values_supported": ["PS384", "ES384", "RS384", "HS256", "HS512", "ES256", "RS256", "HS384", "ES512", "PS256", "PS512", "RS512"],
-         "id_token_encryption_alg_values_supported": ["RSA-OAEP", "RSA1_5"],
-         "id_token_encryption_enc_values_supported": ["A128GCM", "A128CBC-HS256"],
-         "userinfo_signing_alg_values_supported": ["PS384", "ES384", "RS384", "HS256", "HS512", "ES256", "RS256", "HS384", "ES512", "PS256", "PS512", "RS512", "none"],
-         "request_object_signing_alg_values_supported": ["PS384", "ES384", "RS384", "ES256", "RS256", "ES512", "PS256", "PS512", "RS512", "none"],
-         "response_modes_supported": ["query", "fragment", "form_post"],
-         "token_endpoint_auth_methods_supported": ["private_key_jwt", "client_secret_basic", "client_secret_post", "tls_client_auth", "client_secret_jwt"],
-         "token_endpoint_auth_signing_alg_values_supported": ["PS384", "ES384", "RS384", "ES256", "RS256", "ES512", "PS256", "PS512", "RS512"],
-         "claims_supported": ["aud", "sub", "iss", "auth_time", "name", "given_name", "family_name", "preferred_username", "email", "acr"],
-         "claim_types_supported": ["normal"],
-         "claims_parameter_supported": false,
-         "scopes_supported": ["openid", "address", "email", "microprofile-jwt", "offline_access", "phone", "profile", "roles", "web-origins"],
-         "request_parameter_supported": true,
-         "request_uri_parameter_supported": true,
-         "code_challenge_methods_supported": ["plain", "S256"],
-         "tls_client_certificate_bound_access_tokens": true,
-     }
-    '''
-    if not url.startswith('https://'):
-        parts = url.split('@', 1)
-        url = asurl('{}/auth/realms/{}/.well-known/openid-configuration'.format(
-            parts[-1], realm or (parts[0] if len(parts) > 1 else 'master')), secure=secure)
-
-    resp = requests.get(url).json()
-    if 'error' in resp:
-        raise RequestError('Error getting .well-known: {}'.format(resp['error']))
-    return resp
-
-
 def with_well_known_secrets_file(
         url=None, client_id='admin-cli', client_secret=None, realm=None,
         redirect_uris=None, fname=True, well_known=None):
+    '''Get a Flask OIDC secrets file from the server's well-known.
+    
+    Arguments:
+        url (str): the url hostname.
+        client_id (str): the client id.
+        client_secret (str): the client secret.
+        realm (str): the keycloak realm.
+        redirect_uris (list): the redirect uris.
+        fname (str, bool): The keycloak secrets filename. Will automatically set.
+        well_known (dict, None): The existing well-known configuration.
+
+    Returns:
+        fname (str): The keycloak secrets filename.
+    '''
     wkn = well_known or get_well_known(url, realm)
     return _write_secrets_file(fname, {
         "web": {
@@ -93,7 +50,21 @@ def with_well_known_secrets_file(
 def with_keycloak_secrets_file(
         url, client_id='admin-cli', client_secret=None, realm='master',
         redirect_uris=None, fname=True):
+    '''Create a keycloak secrets file from basic info. Minimizes redundant info.
+    
+    Arguments:
+        url (str): the url hostname.
+        client_id (str): the client id.
+        client_secret (str): the client secret.
+        realm (str): the keycloak realm.
+        redirect_uris (list): the redirect uris.
+        fname (str, bool): The keycloak secrets filename. Will automatically set.
+
+    Returns:
+        fname (str): The keycloak secrets filename.
+    '''
     assert client_id and client_secret, 'You must set a OIDC client id.'
+    url = asurl(url)
     realm_url = "{}/auth/realms/{}".format(url, realm)
     oidc_url = '{}/protocol/openid-connect'.format(realm_url)
     return _write_secrets_file(fname, {
@@ -111,6 +82,17 @@ def with_keycloak_secrets_file(
 
 
 def with_keycloak_secrets_file_from_environment(env=None, url=None, realm=None, fname=None):
+    '''Create a keycloak secrets file from basic info + environment. Minimizes redundant info.
+    
+    Arguments:
+        env (str, Env): the environment variable namespace.
+        url (str): the url hostname.
+        realm (str): the keycloak realm.
+        fname (str, bool): The keycloak secrets filename. Will automatically set.
+
+    Returns:
+        fname (str): The keycloak secrets filename.
+    '''
     env = env or 'APP'
     if isinstance(env, str):
         env = Env(env)
@@ -137,23 +119,127 @@ def _write_secrets_file(fname, cfg):
 
 
 
+@functools.lru_cache()
+def get_well_known(url, realm=None, secure=None):
+    '''Get the well known for an oauth2 server.
+
+    These are equivalent:
+     - auth.myproject.com
+     - master@auth.myproject.com
+     - https://auth.myproject.com/auth/realms/master/.well-known/openid-configuration
+
+    For another realm, you can do:
+     - mycustom@auth.myproject.com
+
+    .. code-block:: python
+
+        # https://auth.myproject.com/auth/realms/master/.well-known/openid-configuration
+        {
+            "issuer": "https://auth.myproject.com/auth/realms/master",
+            "authorization_endpoint": "https://auth.myproject.com/auth/realms/master/protocol/openid-connect/auth",
+            "token_endpoint": "https://auth.myproject.com/auth/realms/master/protocol/openid-connect/token",
+            "token_introspection_endpoint": "https://auth.myproject.com/auth/realms/master/protocol/openid-connect/token/introspect",
+            "introspection_endpoint": "https://auth.myproject.com/auth/realms/master/protocol/openid-connect/token/introspect"
+            "userinfo_endpoint": "https://auth.myproject.com/auth/realms/master/protocol/openid-connect/userinfo",
+            "end_session_endpoint": "https://auth.myproject.com/auth/realms/master/protocol/openid-connect/logout",
+            "jwks_uri": "https://auth.myproject.com/auth/realms/master/protocol/openid-connect/certs",
+            "registration_endpoint": "https://auth.myproject.com/auth/realms/master/clients-registrations/openid-connect",
+
+            "check_session_iframe": "https://auth.myproject.com/auth/realms/master/protocol/openid-connect/login-status-iframe.html",
+            "grant_types_supported": ["authorization_code", "implicit", "refresh_token", "password", "client_credentials"],
+            "response_types_supported": ["code", "none", "id_token", "token", "id_token token", "code id_token", "code token", "code id_token token"],
+            "subject_types_supported": ["public", "pairwise"],
+            "id_token_signing_alg_values_supported": ["PS384", "ES384", "RS384", "HS256", "HS512", "ES256", "RS256", "HS384", "ES512", "PS256", "PS512", "RS512"],
+            "id_token_encryption_alg_values_supported": ["RSA-OAEP", "RSA1_5"],
+            "id_token_encryption_enc_values_supported": ["A128GCM", "A128CBC-HS256"],
+            "userinfo_signing_alg_values_supported": ["PS384", "ES384", "RS384", "HS256", "HS512", "ES256", "RS256", "HS384", "ES512", "PS256", "PS512", "RS512", "none"],
+            "request_object_signing_alg_values_supported": ["PS384", "ES384", "RS384", "ES256", "RS256", "ES512", "PS256", "PS512", "RS512", "none"],
+            "response_modes_supported": ["query", "fragment", "form_post"],
+            "token_endpoint_auth_methods_supported": ["private_key_jwt", "client_secret_basic", "client_secret_post", "tls_client_auth", "client_secret_jwt"],
+            "token_endpoint_auth_signing_alg_values_supported": ["PS384", "ES384", "RS384", "ES256", "RS256", "ES512", "PS256", "PS512", "RS512"],
+            "claims_supported": ["aud", "sub", "iss", "auth_time", "name", "given_name", "family_name", "preferred_username", "email", "acr"],
+            "claim_types_supported": ["normal"],
+            "claims_parameter_supported": false,
+            "scopes_supported": ["openid", "address", "email", "microprofile-jwt", "offline_access", "phone", "profile", "roles", "web-origins"],
+            "request_parameter_supported": true,
+            "request_uri_parameter_supported": true,
+            "code_challenge_methods_supported": ["plain", "S256"],
+            "tls_client_certificate_bound_access_tokens": true,
+        }
+
+    '''
+    if not url.startswith('https://'):
+        parts = url.split('@', 1)
+        url = asurl('{}/auth/realms/{}/.well-known/openid-configuration'.format(
+            parts[-1], realm or (parts[0] if len(parts) > 1 else 'master')), secure=secure)
+
+    resp = requests.get(url).json()
+    if 'error' in resp:
+        raise RequestError('Error getting .well-known: {}'.format(resp['error']))
+    return resp
+
+
+
+
+
 # def kmerge(*xs, sep='_'):
 #     return sep.join(str(x) for x in xs if x)
 
 # def envv(k, prefix=None, default=None):
 #     return os.getenv(kmerge(k, prefix)) or default
 
-def aslist(x):
-    return x if isinstance(x, (list, tuple)) else [x] if x else []
+def _asitems(itemtype, *othertypes):
+    def inner(x):
+        return x if isinstance(x, itemtype) else itemtype(x) if isinstance(x, othertypes) else [x] if x else []
+    name = itemtype.__name__
+    inner.__name__ = 'as{}'.format(name)
+    inner.__doc__ = '''Convert value to {name}. 
+    
+    Falsey values becomes an empty {name}. 
+    Types ({others}) are cast to {name}. 
+    Everything else becomes a single element {name}.
+    '''.format(name='``{}``'.format(name), others=', '.join('``{}``'.format(c.__name__) for c in othertypes))
+    return inner
+
+aslist = _asitems(list, tuple, set)
+as_set = _asitems(set, tuple, list)
+astuple = _asitems(tuple, list, set)
+
+# def aslist(x):
+#     return x if isinstance(x, list) else list(x) if isinstance(x, tuple) else [x] if x else []
+
 
 
 def asurl(url, *paths, secure=None, **args):
+    '''Given a hostname, convert it to a URL.
+
+    .. code-block:: python
+
+        # schema
+        assert oidcat.util.asurl('my.server.com') == 'https://my.server.com'
+        assert oidcat.util.asurl('localhost:8080') == 'http://localhost:8080'
+        assert oidcat.util.asurl('my.server.com', secure=False) == 'http://my.server.com'
+
+        # adding paths
+        assert oidcat.util.asurl('my.server.com', 'something', 'blah') == 'https://my.server.com/something/blah'
+
+        # argument formatting
+        assert oidcat.util.asurl('my.server.com', myvar=1, othervar=2) == 'https://my.server.com?myvar=1&othervar=2'
+        assert oidcat.util.asurl('my.server.com?existingvar=0#helloimahash', myvar=1, othervar=2) == 'https://my.server.com?existingvar=0&myvar=1&othervar=2#helloimahash'
+    
+    Arguments:
+        url (str): The hostname. Can start with https?:// or can just be my.domain.com.
+        *paths (str): The paths to append to the URL.
+        secure (bool): Should we use http or https? If not specified, it will use https (unless it's localhost)
+            If it already starts with https?://, then this is ignored.
+        **args: query parameters to add to the url.
+    '''
     if url:
         if not (url.startswith('http://') or url.startswith('https://')):
             if secure is None:
-                secure = url != 'localhost'
+                secure = url.startswith('localhost')
             url = 'http{}://{}'.format(bool(secure)*'s', url)
-        url = os.path.join(url, *(p.lstrip('/') for p in paths))
+        url = os.path.join(url, *(p.lstrip('/') for p in paths if p))
         # add args, and make sure they go before the hashstring
         args = {k: v for k, v in args.items() if v is not None}
         if args:
@@ -162,7 +248,7 @@ def asurl(url, *paths, secure=None, **args):
             if hsh:
                 url += '#' + hsh
         return url
-as_url = asurl  # backwards compat
+# as_url = asurl  # backwards compat
 
 def get_redirect_uris(uris=None):
     uris = asurl(uris or os.getenv(HOST_KEY) or '{}:{}/*'.format(DEFAULT_HOST, os.getenv(PORT_KEY, str(DEFAULT_PORT))))
@@ -178,6 +264,7 @@ def get_redirect_uris(uris=None):
 
 
 class Env:
+    '''Get environment variables. Makes for easy variable namespacing/prefixing.'''
     def __init__(self, prefix=None, upper=True, **kw):
         self.prefix = prefix or ''
         self.upper = upper
@@ -186,20 +273,24 @@ class Env:
             self.prefix = self.prefix.upper()
 
     def __str__(self):
+        '''Show the matching environment variables.'''
         return '<env {}>'.format(''.join([
             '\n  {}={}'.format(k, self(k)) for k in self.vars
         ]))
 
     def __contains__(self, key):
+        '''Does that key (plus prefix) exist?'''
         return self.key(key) in os.environ
 
     def __getattr__(self, key):
+        '''Get the environment variable.'''
         return self.get(key)
 
     def __call__(self, key, default=None, *a, **kw):
         return self.get(key, default, *a, **kw)
 
     def get(self, key, default=None, cast=None):
+        '''Get the environment variable.'''
         y = os.environ.get(self.key(key))
         if y is None:
             return default
@@ -212,16 +303,38 @@ class Env:
         return y
 
     def gather(self, *keys, **kw):
+        '''Get multiple environment variables. You can do it either
+        
+        Arguments:
+            *keys: the keys to get.
+            **kw: if ``*keys`` is empty, these keys to get, also allowing you to rename the keys in the return value. 
+                The values will be used to lookup and the keys will be used to rename the variable.
+                If ``*keys`` is not empty, ``**kw`` will be passed to ``self.get`` instead.
+
+        Returns:
+            values (str, list, dict): if ``len(keys) == 1``, then it will return a single value.
+                Otherwise it will return a list. If ``*keys`` are not specified and ``**kw`` is, 
+                it will return a dictionary.
+
+        .. code-block:: python
+
+            env = Env('app_')  # we're trying to access: APP_HOST, APP_USERNAME
+            assert env.gather('host') == 'myhost.com'
+            assert env.gather('host', 'username') == ['myhost.com', 'myusername']
+            assert env.gather(url='host', user='username') == {'url': 'myhost.com', 'user': 'myusername'}
+        '''
         return (
             (self.get(keys[0], **kw) if len(keys) == 1 else [self.get(k, **kw) for k in keys])
             if keys else {k: self.get(v) for k, v in kw.items()}
         )
 
     def key(self, x):
+        '''Prepare the environment key.'''
         k = (self.prefix or '') + self.vars.get(x, x)
         return k.upper() if self.upper else k
 
     def all(self):
+        '''Get all environment variables that match the prefix.'''
         return {k: v for k, v in os.environ.items() if k.startswith(self.prefix)}
 
 
@@ -230,9 +343,12 @@ class Env:
 
 class Role(list):
     '''Define a set of roles: e.g.
-    >>> r, w, d = Role('read'), Role('write'), Role('delete')
-    >>> r.audio + r.any.spl + (r+w).meta + d('audio', 'spl')
-    ['read-audio', 'read-any-spl', 'read-any-meta', 'write-any-meta', 'delete-audio', 'delete-spl']
+
+    .. code-block:: python
+
+        r, w, d = Role('read'), Role('write'), Role('delete')
+        r.audio + r.any.spl + (r+w).meta + d('audio', 'spl')
+        # ['read-audio', 'read-any-spl', 'read-any-meta', 'write-any-meta', 'delete-audio', 'delete-spl']
     '''
     def __init__(self, *xs):
         super().__init__(xi for x in xs for xi in ([x] if isinstance(x, str) else x))
@@ -260,16 +376,23 @@ class Role(list):
 
 class Colors(dict):
     '''Color text. e.g.
-    >>> print(color('hi', 'red') + color.blue('hello') + color['green']('sup'))
+
+    To use the builtin colors:
+    
+    .. code-block:: python
+
+        print(oidcat.util.color('hi', 'red') + oidcat.util.color.blue('hello') + oidcat.util.color['green']('sup'))
     '''
     def __call__(self, x, name=None):
         if not name:
             return str(x)
         return '\033[{}m{}\033[0m'.format(super().__getitem__(name.lower()), x) if name else x
+
     def __getitem__(self, k):
         if k not in self:
             raise KeyError(k)
         return functools.partial(self.__call__, name=k)
+
     def __getattr__(self, k):
         if k not in self:
             raise AttributeError(k)
@@ -293,10 +416,31 @@ color = Colors(
     lightcyan='1;36',
     white='1;37',
 )
+Colors.__doc__ += '''
+
+Builtin colors: 
+{}
+'''.format('\n'.join(
+    ' - ``{}``: ``{}``'.format(k, v)
+    for k, v in color.items()
+))
+
 color_ = color
 
 
 def ask(question, color=None, secret=False):
+    '''Prompt the user for input.
+
+    .. code-block:: python
+
+        oidcat.util.ask("what's your username?", 'purple')
+        oidcat.util.ask("what's your password?", 'purple', secure=True)
+    
+    Arguments:
+        question (str): the prompt message.
+        color (str, None): the color name for the prompt message. See ``oidcat.util.color`` for available colors.
+        secret (bool): Is the value secret? If yes, it will use a password input.
+    '''
     prompt = input
     if secret:
         import getpass
@@ -306,6 +450,24 @@ def ask(question, color=None, secret=False):
 
 @contextlib.contextmanager
 def saveddict(fname):
+    '''A context manager that lets you store data in a JSON file. This is useful for storing configuration values 
+    between runs (great for configuring CLIs).
+    If ``fname`` is None, then nothing is saved to file.
+    
+    .. code-block:: python
+
+        # you can use either
+        fname = None  # this just won't save anything
+        fname = 'my/params-file.json'
+
+        with oidcat.util.saveddict(fname) as cfg:
+            cfg['host'] = host or cfg.get('host') or SOME_DEFAULT_HOST
+            cfg['username'] = username or cfg.get('username') or oidcat.util.ask("what's your username?")
+            password = password or cfg.get('password') or oidcat.util.ask("what's your password?", secret=True)
+            if store_password:  # not very secure !!
+                cfg['password'] = password
+                
+    '''
     import base64
     try:
         data = {}

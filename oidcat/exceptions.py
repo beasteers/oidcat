@@ -14,6 +14,7 @@ class RequestError(Exception):
     payload = None
     headers = None
     def __init__(self, message=None, status_code=None, data=None, headers=None, format=False):
+        '''Base oidcat Exception.'''
         self.status_code = status_code or self.status_code
         self.payload = dict(self.payload or {}, **(data or {}))
         self.headers = dict(self.headers or {}, **(headers or {}))
@@ -40,12 +41,15 @@ class RequestError(Exception):
         defaults = dict({
             'type': 'Exception from server', 
             'message': 'The server returned an error response.', 
-            'traceback': 'no traceback given in response: {}'.format(resp)
+            # 'traceback': 'no traceback given in response: {}'.format(resp)
         }, **(defaults or {}))
-        # TODO: drop server traceback if none exists
-        return cls(
-            ('{} - '.format(additional_message) if additional_message else '') + 
-            '{type}: {message}\n\nServer Traceback:\n{traceback}'.format(**dict(defaults, **resp)), data=resp)
+        defaults = dict(defaults, **resp)
+        message = ('{} - '.format(additional_message) if additional_message else '') + '{type}: {message}'
+        tb = defaults.get('traceback')
+        if tb:
+            message += '\n\nServer Traceback:\n{traceback}'
+
+        return cls(message.format(**dict(defaults, **resp)), data=resp)
 
 class Unauthorized(RequestError):
     status_code = 401
