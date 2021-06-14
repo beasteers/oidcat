@@ -51,7 +51,14 @@ class RequestError(Exception):
 
         return cls(message.format(**dict(defaults, **resp)), data=resp)
 
-class Unauthorized(RequestError):
+class AuthenticationError(RequestError):
+    '''A generic authentication base class signifying that there was some problem with authenticating a user.'''
+    status_code = 401
+    default_message = 'Insufficient privileges'
+    traceback_in_response = False
+
+class Unauthorized(AuthenticationError):
+    '''The server-side reported that the user is not authorized to access a resource.'''
     status_code = 401
     default_message = 'Insufficient privileges'
     headers = {'WWW-Authenticate': 'Bearer'}

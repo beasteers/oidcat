@@ -116,3 +116,5 @@ def test_accessible(server, sess, bearer):
 def test_inaccessible2(server, sess, bearer):
     assert server.get('/inaccessible').status_code == 401
     assert server.get('/inaccessible', headers=bearer).status_code == 401
+
+

@@ -19,14 +19,15 @@ def with_well_known_secrets_file(
         url=None, client_id='admin-cli', client_secret=None, realm=None,
         redirect_uris=None, fname=True, well_known=None):
     '''Get a Flask OIDC secrets file from the server's well-known.
-    
+
     Arguments:
         url (str): the url hostname.
         client_id (str): the client id.
         client_secret (str): the client secret.
         realm (str): the keycloak realm.
         redirect_uris (list): the redirect uris.
-        fname (str, bool): The keycloak secrets filename. Will automatically set.
+        fname (str, bool): The keycloak secrets filename. If not specified,
+            it will automatically create a file in ``~/.*_client_secrets/*.json``.
         well_known (dict, None): The existing well-known configuration.
 
     Returns:
@@ -38,7 +39,7 @@ def with_well_known_secrets_file(
             "client_id": client_id,
             "client_secret": client_secret,
             "issuer": wkn['issuer'],
-            "redirect_uris": get_redirect_uris(redirect_uris),
+            "redirect_uris": _get_redirect_uris(redirect_uris),
             "auth_uri": wkn['authorization_endpoint'],
             "userinfo_uri": wkn['userinfo_endpoint'],
             "token_uri": wkn['token_endpoint'],
@@ -48,23 +49,25 @@ def with_well_known_secrets_file(
 
 
 def with_keycloak_secrets_file(
-        url, client_id='admin-cli', client_secret=None, realm='master',
+        url, client_id='admin-cli', client_secret=None, realm=None,
         redirect_uris=None, fname=True):
     '''Create a keycloak secrets file from basic info. Minimizes redundant info.
-    
+
     Arguments:
         url (str): the url hostname.
         client_id (str): the client id.
         client_secret (str): the client secret.
         realm (str): the keycloak realm.
         redirect_uris (list): the redirect uris.
-        fname (str, bool): The keycloak secrets filename. Will automatically set.
+        fname (str, bool): The keycloak secrets filename. If not specified,
+            it will automatically create a file in ``~/.*_client_secrets/*.json``.
 
     Returns:
         fname (str): The keycloak secrets filename.
     '''
     assert client_id and client_secret, 'You must set a OIDC client id.'
     url = asurl(url)
+    realm = realm or 'master'
     realm_url = "{}/auth/realms/{}".format(url, realm)
     oidc_url = '{}/protocol/openid-connect'.format(realm_url)
     return _write_secrets_file(fname, {
@@ -72,7 +75,7 @@ def with_keycloak_secrets_file(
             "client_id": client_id,
             "client_secret": client_secret,
             "issuer": realm_url,
-            "redirect_uris": get_redirect_uris(redirect_uris),
+            "redirect_uris": _get_redirect_uris(redirect_uris),
             "auth_uri": "{}/auth".format(oidc_url),
             "userinfo_uri": "{}/userinfo".format(oidc_url),
             "token_uri": "{}/token".format(oidc_url),
@@ -83,12 +86,13 @@ def with_keycloak_secrets_file(
 
 def with_keycloak_secrets_file_from_environment(env=None, url=None, realm=None, fname=None):
     '''Create a keycloak secrets file from basic info + environment. Minimizes redundant info.
-    
+
     Arguments:
         env (str, Env): the environment variable namespace.
         url (str): the url hostname.
         realm (str): the keycloak realm.
-        fname (str, bool): The keycloak secrets filename. Will automatically set.
+        fname (str, bool): The keycloak secrets filename. If not specified,
+            it will automatically create a file in ``~/.*_client_secrets/*.json``.
 
     Returns:
         fname (str): The keycloak secrets filename.
@@ -98,8 +102,8 @@ def with_keycloak_secrets_file_from_environment(env=None, url=None, realm=None, 
         env = Env(env)
     return with_keycloak_secrets_file(
         asurl(url or env('AUTH_HOST')), env('CLIENT_ID'), env('CLIENT_SECRET'),
-        realm=realm or env('AUTH_REALM', 'master'),
-        redirect_uris=get_redirect_uris(env('REDIRECT_URIS')),
+        realm=realm or env('AUTH_REALM') or None,
+        redirect_uris=_get_redirect_uris(env('REDIRECT_URIS')),
         fname=fname,
     )
 
@@ -108,7 +112,8 @@ def _write_secrets_file(fname, cfg):
     if not fname:
         return cfg
     if fname is True:
-        fname = os.path.expanduser('~/.{}_client_secrets/{}.json'.format(__name__.split('.')[0], cfg.get('client_id', 'secrets')))
+        fname = os.path.expanduser('~/.{}_client_secrets/{}.json'.format(
+            __name__.split('.')[0], cfg.get('client_id', 'secrets')))
     fname = os.path.abspath(fname)
     os.makedirs(os.path.dirname(fname), exist_ok=True)
     with open(fname, 'w') as f:
@@ -117,6 +122,24 @@ def _write_secrets_file(fname, cfg):
     return fname
 
 
+_WK_PATH = '/auth/realms/{realm}/.well-known/openid-configuration'
+
+def well_known_url(url, realm=None, secure=None):
+    '''Prepares a consistent well-known url'''
+    path = ''
+    if '/.well-known/openid' not in url:
+        url, realm = _parse_auth_url(url, realm)
+        path = _WK_PATH.format(realm=realm or 'master')
+    url = asurl(url, path, secure=secure)
+    return url
+
+
+def _get_redirect_uris(uris=None, **kw):
+    '''Gets properly formatted uri's for the server-side secrets file configuration.'''
+    uris = aslist(uris)
+    if not uris:
+        uris = [os.getenv(HOST_KEY) or '{}:{}/*'.format(DEFAULT_HOST, os.getenv(PORT_KEY, str(DEFAULT_PORT)))]
+    return [asurl(u, **kw) for u in uris]
 
 
 @functools.lru_cache()
@@ -168,46 +191,37 @@ def get_well_known(url, realm=None, secure=None):
         }
 
     '''
-    if not url.startswith('https://'):
-        parts = url.split('@', 1)
-        url = asurl('{}/auth/realms/{}/.well-known/openid-configuration'.format(
-            parts[-1], realm or (parts[0] if len(parts) > 1 else 'master')), secure=secure)
-
+    url = well_known_url(url, realm, secure=secure)
     resp = requests.get(url).json()
     if 'error' in resp:
         raise RequestError('Error getting .well-known: {}'.format(resp['error']))
     return resp
 
 
-
-
-
-# def kmerge(*xs, sep='_'):
-#     return sep.join(str(x) for x in xs if x)
-
-# def envv(k, prefix=None, default=None):
-#     return os.getenv(kmerge(k, prefix)) or default
-
 def _asitems(itemtype, *othertypes):
+    '''A helper meta function that generates casting functions. 
+    e.g.: ``aslist = _asitems(list, tuple, set)``'''
     def inner(x):
-        return x if isinstance(x, itemtype) else itemtype(x) if isinstance(x, othertypes) else [x] if x else []
+        return (
+            x if isinstance(x, itemtype) else
+            itemtype(x) if isinstance(x, othertypes) else
+            [x] if x else [])
     name = itemtype.__name__
     inner.__name__ = 'as{}'.format(name)
-    inner.__doc__ = '''Convert value to {name}. 
-    
-    Falsey values becomes an empty {name}. 
-    Types ({others}) are cast to {name}. 
+    inner.__doc__ = '''Convert value to {name}.
+
+    Falsey values becomes an empty {name}.
+    Types ({others}) are cast to {name}.
     Everything else becomes a single element {name}.
-    '''.format(name='``{}``'.format(name), others=', '.join('``{}``'.format(c.__name__) for c in othertypes))
+    '''.format(
+        name='``{}``'.format(name), 
+        others=', '.join('``{}``'.format(c.__name__) for c in othertypes))
     return inner
+
 
 aslist = _asitems(list, tuple, set)
 as_set = _asitems(set, tuple, list)
 astuple = _asitems(tuple, list, set)
-
-# def aslist(x):
-#     return x if isinstance(x, list) else list(x) if isinstance(x, tuple) else [x] if x else []
-
 
 
 def asurl(url, *paths, secure=None, **args):
@@ -226,7 +240,7 @@ def asurl(url, *paths, secure=None, **args):
         # argument formatting
         assert oidcat.util.asurl('my.server.com', myvar=1, othervar=2) == 'https://my.server.com?myvar=1&othervar=2'
         assert oidcat.util.asurl('my.server.com?existingvar=0#helloimahash', myvar=1, othervar=2) == 'https://my.server.com?existingvar=0&myvar=1&othervar=2#helloimahash'
-    
+
     Arguments:
         url (str): The hostname. Can start with https?:// or can just be my.domain.com.
         *paths (str): The paths to append to the URL.
@@ -237,7 +251,7 @@ def asurl(url, *paths, secure=None, **args):
     if url:
         if not (url.startswith('http://') or url.startswith('https://')):
             if secure is None:
-                secure = url.startswith('localhost')
+                secure = not url.startswith('localhost')
             url = 'http{}://{}'.format(bool(secure)*'s', url)
         url = os.path.join(url, *(p.lstrip('/') for p in paths if p))
         # add args, and make sure they go before the hashstring
@@ -248,19 +262,25 @@ def asurl(url, *paths, secure=None, **args):
             if hsh:
                 url += '#' + hsh
         return url
-# as_url = asurl  # backwards compat
-
-def get_redirect_uris(uris=None):
-    uris = asurl(uris or os.getenv(HOST_KEY) or '{}:{}/*'.format(DEFAULT_HOST, os.getenv(PORT_KEY, str(DEFAULT_PORT))))
-    return uris if isinstance(uris, (list, tuple)) else [uris] if uris else uris
 
 
-# def traceback_html(e):
-#     return '''{err}<pre><h3>Traceback (most recent call last):</h3><div>{tb}</div><h3>{typename}: {err}</h3></pre>'''.strip().format(
-#         err=e, tb='<hr/>'.join(traceback.format_tb(e.__traceback__)).strip('\n'),
-#         typename=type(e).__name__)
+def _parse_auth_url(url, realm=None):
+    '''Parses an optional realm parameter out of a url. e.g. myrealm@auth.domain.com'''
+    # split off schema
+    prefix = None
+    parts = url.split('://', 1)
+    if len(parts) > 1:
+        prefix, url = parts
 
+    # split off realm
+    parts = url.split('@', 1)
+    realm = (parts[0] if len(parts) > 1 else realm)
+    url = parts[-1]
 
+    # put it back together
+    if prefix:
+        url = '{}://{}'.format(prefix, url)
+    return url, realm
 
 
 class Env:
@@ -304,7 +324,7 @@ class Env:
 
     def gather(self, *keys, **kw):
         '''Get multiple environment variables. You can do it either
-        
+
         Arguments:
             *keys: the keys to get.
             **kw: if ``*keys`` is empty, these keys to get, also allowing you to rename the keys in the return value. 
@@ -337,8 +357,15 @@ class Env:
         '''Get all environment variables that match the prefix.'''
         return {k: v for k, v in os.environ.items() if k.startswith(self.prefix)}
 
+    DELETE = object()
 
-
+    def set(self, **kw):
+        for k, v in kw.items():
+            k = self.key(k)
+            if v is self.DELETE:
+                del os.environ[k]
+                continue
+            os.environ[k] = str(v)
 
 
 class Role(list):
@@ -348,10 +375,13 @@ class Role(list):
 
         r, w, d = Role('read'), Role('write'), Role('delete')
         r.audio + r.any.spl + (r+w).meta + d('audio', 'spl')
-        # ['read-audio', 'read-any-spl', 'read-any-meta', 'write-any-meta', 'delete-audio', 'delete-spl']
+        # ['read-audio', 'read-any-spl', 'read-any-meta', 'write-any-meta',
+        #  'delete-audio', 'delete-spl']
     '''
     def __init__(self, *xs):
-        super().__init__(xi for x in xs for xi in ([x] if isinstance(x, str) else x))
+        super().__init__(
+            xi for x in xs for xi in (
+                [x] if isinstance(x, str) else x))
 
     def __call__(self, *keys):
         return Role('{}-{}'.format(i, ki) for i in self for k in keys for ki in Role(k))
@@ -359,26 +389,19 @@ class Role(list):
     def __add__(self, *xs):
         return Role(self, *Role(*xs))
 
-    __getattr__ = lambda self, k: self(k)
-    __radd__ = lambda self, x: Role(x).join(self)
+    def __getattr__(self, k):
+        return self(k)
 
-# r, w, d = Role('read'), Role('write'), Role('delete')
-# GROUPS = {
-#     'sensor-engineer': r.audio + r.any.spl + (r+w+d).any.meta,
-#     'sensor': w.audio + w.spl + w.status,
-#     'agent': r.spl + w('audio', 'spl'),
-#     'participant': (r+w+d).audio,
-# }
-
-
-
+    def __radd__(self, x):
+        # return Role(x).join(self)  # << idk wtf that was supposed to be
+        return Role(x) + self
 
 
 class Colors(dict):
     '''Color text. e.g.
 
     To use the builtin colors:
-    
+
     .. code-block:: python
 
         print(oidcat.util.color('hi', 'red') + oidcat.util.color.blue('hello') + oidcat.util.color['green']('sup'))
@@ -397,6 +420,7 @@ class Colors(dict):
         if k not in self:
             raise AttributeError(k)
         return functools.partial(self.__call__, name=k)
+
 
 color = Colors(
     black='0;30',
@@ -418,7 +442,7 @@ color = Colors(
 )
 Colors.__doc__ += '''
 
-Builtin colors: 
+Builtin colors:
 {}
 '''.format('\n'.join(
     ' - ``{}``: ``{}``'.format(k, v)
@@ -435,11 +459,13 @@ def ask(question, color=None, secret=False):
 
         oidcat.util.ask("what's your username?", 'purple')
         oidcat.util.ask("what's your password?", 'purple', secure=True)
-    
+
     Arguments:
         question (str): the prompt message.
-        color (str, None): the color name for the prompt message. See ``oidcat.util.color`` for available colors.
-        secret (bool): Is the value secret? If yes, it will use a password input.
+        color (str, None): the color name for the prompt message.
+            See ``oidcat.util.color`` for available colors.
+        secret (bool): Is the value secret? If yes, it will use a
+            password input.
     '''
     prompt = input
     if secret:
@@ -453,7 +479,7 @@ def saveddict(fname):
     '''A context manager that lets you store data in a JSON file. This is useful for storing configuration values 
     between runs (great for configuring CLIs).
     If ``fname`` is None, then nothing is saved to file.
-    
+
     .. code-block:: python
 
         # you can use either
@@ -462,11 +488,15 @@ def saveddict(fname):
 
         with oidcat.util.saveddict(fname) as cfg:
             cfg['host'] = host or cfg.get('host') or SOME_DEFAULT_HOST
-            cfg['username'] = username or cfg.get('username') or oidcat.util.ask("what's your username?")
-            password = password or cfg.get('password') or oidcat.util.ask("what's your password?", secret=True)
+            cfg['username'] = (
+                username or cfg.get('username') or
+                oidcat.util.ask("what's your username?"))
+            password = (
+                password or cfg.get('password') or
+                oidcat.util.ask("what's your password?", secret=True))
             if store_password:  # not very secure !!
                 cfg['password'] = password
-                
+
     '''
     import base64
     try:

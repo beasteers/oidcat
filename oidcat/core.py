@@ -38,14 +38,13 @@ import requests
 # from requests.auth import HTTPBasicAuth
 from .token import Token
 from .well_known import WellKnown
-from . import util, RequestError
-from .util import get_well_known
+from . import util, RequestError, AuthenticationError
 
-__all__ = ['Session', 'Access']
+# __all__ = ['Session', 'Access']
 
 
 class Session(requests.Session):
-    def __init__(self, url, username=None, password=None,
+    def __init__(self, auth_url, username=None, password=None,
                  client_id='admin-cli', client_secret=None,
                  inject_token=True, token_key=None, **kw):
         '''A ``requests.Session`` object that implicitly handles 0Auth2 authentication
@@ -66,7 +65,7 @@ class Session(requests.Session):
             # and everything is auto-magically authenticated !
             sess.get('api.myserver.com/api/something/secret').json()
 
-            # if you don't want to send a token for a specific endpoint (for whatever reason), 
+            # if you don't want to send a token for a specific endpoint (for whatever reason),
             # you can disable it
             sess.get('otherserver.com/i/cant/have/a/token', token=False).json()
 
@@ -88,22 +87,36 @@ class Session(requests.Session):
         '''
         super().__init__()
         self.access = Access(
-            url, username, password, client_id, client_secret, sess=self, **kw)
+            auth_url, username, password, client_id, client_secret, sess=self, **kw)
         self._inject_token = inject_token
         self._token_key = token_key
 
     def __repr__(self):
         return '<{}({!r})>'.format(self.__class__.__qualname__, self.access)
 
-    def request(self, *a, token=..., **kw):
-        if token == ...:
+    def request(self, *a, token=None, **kw):
+        # check to see if we should use the default behavior
+        if token is None:
             token = self._inject_token
-        if token:
-            tkn = token if isinstance(token, Token) else self.access.require()
-            if self._token_key:
-                kw.setdefault('data', {}).setdefault(self._token_key, str(tkn))
+
+        # check if the user disabled the token
+        if token is not False:
+            if isinstance(token, Token):
+                # if the user provided their own token, let them know
+                # that it's invalid.
+                if not token:
+                    raise AuthenticationError('The token provided is invalid: {!r}'.format(token))
             else:
-                kw.setdefault('headers', {}).setdefault("Authorization", "Bearer {}".format(tkn))
+                # otherwise we do our own auto-magic tokens
+                token = self.access.require()
+
+            # decide where to put the token in the request
+            if self._token_key:
+                kw.setdefault('data', {}).setdefault(self._token_key, str(token))
+            else:
+                kw.setdefault('headers', {}).setdefault("Authorization", "Bearer {}".format(token))
+
+        # finally, make the normal request + token
         return super().request(*a, **kw)
 
     def login(self, *a, **kw):
@@ -129,13 +142,13 @@ class _Qs:
 #       can be reused outside of just requests.
 
 class Access:
-    _discard_credentials = False
+    # _discard_credentials = False
     def __init__(self, url, username=None, password=None,
                  client_id='admin-cli', client_secret=None,
                  token=None, refresh_token=None, 
                  refresh_buffer=8, refresh_token_buffer=20, 
                  login=None, offline=None, ask=False, 
-                 store=False, store_pass=False,
+                 store=False, discard_credentials=False, 
                  sess=None, _wk=None):
         '''Controls access, making sure you always have a valid token.
 
@@ -178,51 +191,59 @@ class Access:
             refresh_token_buffer (float): equivalent to `refresh_buffer`, but for the refresh token.
             login (bool): whether we should attempt to login. By default, this will be true
                 unless only an access token is specified.
-            offline (bool): should we request offline tokens?
+            offline (bool): should we request offline tokens? This lets you have long term 
+                (potentially indefinite) access without needing a username and password. To pass an
+                existing offline token, pass it as ``refresh_token=offline_token``.
             sess (Session): an existing session object.
             ask (bool): if we don't have any valid credentials, should we prompt for
                 a username and password? Useful for cli apps.
             store (bool): should we store tokens and urls to disk? (persistance between cli calls)
-
+            discard_credentials (bool): should we discard the credentials after logging in?
+                By default, we will keep the last used username and password on the object so 
+                that we can log back in after the refresh token expires. If this is set to True,
+                it means that you will only have automatic access for the lifetime of the 
+                refresh token. In order to maintain access you would have to call 
+                ``self.login(username, password)`` to renew the refresh token before it expires.
         '''
         self.sess = sess or requests
         self.client_id = client_id
         self.client_secret = client_secret
 
-        self.refresh_buffer = refresh_buffer
-        self.lock = threading.Lock()
+        # this is used to make sure that two threads using the same sess object
+        # don't both try to re-login at the same time.
+        self.login_lock = threading.Lock()
 
-        # possibly load token from file
-        self.ask = ask
+        # (maybe) load saved info from file
         self.store = os.path.expanduser(store) if store else store
-        # self.store_pass = store_pass
         with util.saveddict(self.store) as cfg:
-            # # read username / password from config
-            # username = self.username or cfg.get('username')
-            # self.password = self.password or cfg.get('password')
-            # if self.store_pass:
-            #     cfg['username'] = self.username
-            #     cfg['password'] = self.password
+            # read cached well-known from config
+            self.well_known = cfg['well_known'] = WellKnown(
+                _wk or cfg.get('well_known') or url,
+                client_id=client_id,
+                client_secret=client_secret,
+                refresh_buffer=refresh_buffer,
+                refresh_token_buffer=refresh_token_buffer)
 
             # read tokens from config
             if token is None and refresh_token is None:
-                token = Token.astoken(cfg.get('token'), refresh_buffer) or None
-                refresh_token = Token.astoken(cfg.get('refresh_token'), refresh_token_buffer) or None
+                token = cfg.get('token')
+                refresh_token = cfg.get('refresh_token') or None
 
-            self.well_known = cfg['well_known'] = WellKnown(
-                _wk or cfg.get('well_known') or get_well_known(url),
-                client_id=client_id, client_secret=client_secret)
-
-        # self._discard_credentials = discard_credentials
-        if not self._discard_credentials:
-            self.username = username
-            self.password = password
+        # tokens
         self.token = Token.astoken(token, refresh_buffer)
-        self.refresh_token = Token.astoken(refresh_token)
+        self.refresh_token = Token.astoken(refresh_token, refresh_token_buffer)
         self.offline = (
             'offline_access' in self.refresh_token.get('scope', '')
         ) if offline is None else offline
 
+        # credentials
+        self.ask = ask
+        self._discard_credentials = discard_credentials
+        if not self._discard_credentials:
+            self.username = username
+            self.password = password
+
+        # login
         if login is None:  # by default, handle login depending on inputs
             login = token is None or self.refresh_token is not None
         if login and not self.token and username and password:
@@ -230,16 +251,17 @@ class Access:
 
     def __repr__(self):
         '''Get a comprehensive view of the contents of the Access object.'''
-        return 'Access(\n{})'.format(''.join('  {}={!r},\n'.format(k, v) if k.strip() else '\n' for k, v in (
-            ('username', self.username),
-            ('client', self.client_id),
-            ('valid', bool(self.token)),
-            ('refresh_valid', bool(self.refresh_token)),
-            # ('',''),  # hack for newline
-            ('token', self.token),
-            # ('',''),  # hack for newline
-            ('refresh_token', self.refresh_token),
-        )))
+        return 'Access(\n{})'.format(''.join(
+            '  {}={!r},\n'.format(k, v) if k.strip() else '\n' for k, v in (
+                ('username', self.username),
+                ('client', self.client_id),
+                ('valid', bool(self.token)),
+                ('refresh_valid', bool(self.refresh_token)),
+                # ('',''),  # hack for newline
+                ('token', self.token),
+                # ('',''),  # hack for newline
+                ('refresh_token', self.refresh_token),
+            )))
 
     def __str__(self):
         '''Get the token as a string.'''
@@ -250,7 +272,7 @@ class Access:
         return bool(self.token)
 
     def require(self):
-        '''Retrieve the token, and refresh if it is expired.'''
+        '''Retrieve the token, and refresh if it is expired. This is thread safe !'''
         if not self.token:
             # this way we won't have to engage the lock every time
             # it will only engage when the token expires, and then
@@ -259,61 +281,61 @@ class Access:
             # the efficiency of this is based on the assumption that:
             #     (timeof(with lock) + timeof(bool(token)))/token.expiration
             #       < timeof(lock) / dt_call
-            # which should almost always be true, because short login tokens are forking awful.
-            with self.lock:
+            # which should almost always be true, because short login tokens 
+            # are forking awful.
+            with self.login_lock:
                 if not self.token:
                     self.login()
         return self.token
 
     def login(self, username=None, password=None, ask=None, offline=None):
         '''Login from your authentication provider and acquire a token.
-        
+
         Arguments:
-            username (str): your username. This value is stored on the object so 
-                subsequent login calls do not need to present it.
-            password (str): your password. This value is stored on the object so 
-                subsequent login calls do not need to present it.
-            ask (bool): if no username/password is present, should we prompt for 
-                one thru the terminal? By default it will be ``False``, unless 
-                ``ask=True`` was provided to __init__().
+            username (str): your username. This value is stored on the object
+                so subsequent login calls do not need to present it.
+            password (str): your password. This value is stored on the object
+                so subsequent login calls do not need to present it.
+            ask (bool): if no username/password is present, should we prompt
+                for one thru the terminal? By default it will be ``False``,
+                unless ``ask=True`` was provided to __init__().
             offline (bool): should we request an offline token? These are usually
                 much longer lived and allows you to have long term access without 
                 having to store a username and password on disk. By default it will 
                 be ``False``, unless ``offline=True`` was provided to __init__().
         '''
         offline = self.offline if offline is None else offline
+
+        # first check if we can use a refresh token
         logged_in = False  # in case the refresh token fails
         if self.refresh_token:
             try:
                 self.token, self.refresh_token = self.well_known.refresh_token(
-                    self.refresh_token, self.refresh_buffer, offline=offline)
+                    self.refresh_token, offline=offline)
                 logged_in = bool(self.token)
             except RequestError as e:
                 if '(invalid_grant)' not in str(e):
                     raise
                 pass  # invalid refresh token - just move on
-        
-        if not logged_in:
+
+        if not logged_in:  # that didn't work, let's try with username/password
             ask = self.ask if ask is None else ask
             username = username or self.username or ask and util.ask(_Qs.USERNAME)
             password = password or self.password or ask and util.ask(_Qs.PASSWORD, secret=True)
-            if not username and not self.refresh_token:
-                raise ValueError('No username provided for login at {}'.format(
+            if not username:
+                raise AuthenticationError('No username provided for login at {}'.format(
                     self.well_known['token_endpoint']))
-            
+
             if not self._discard_credentials:
                 self.username, self.password = username, password
 
             self.token, self.refresh_token = self.well_known.get_token(
-                username, password, self.refresh_buffer, offline=offline)
+                username, password, offline=offline)
 
         if self.store:
             with util.saveddict(self.store) as cfg:
                 cfg['token'] = str(self.token)
                 cfg['refresh_token'] = str(self.refresh_token)
-                # if self.store_pass:
-                #     cfg['username'] = self.username
-                #     cfg['password'] = self.password
 
     def logout(self):
         '''Logout from your authentication provider.'''
@@ -323,7 +345,7 @@ class Access:
         if self.store:
             with util.saveddict(self.store) as cfg:
                 cfg['token'] = cfg['refresh_token'] = None
-                cfg['username'] = cfg['password'] = None
+                cfg['username'] = cfg['password'] = None  # making sure
 
     def configure(self, clear=False, **kw):
         '''Update the saved information stored on disk.'''
@@ -371,12 +393,12 @@ def response_json(resp):
             data = {'error': True, 'type': 'BadGateway', 'code': 502, 'message': txt}
         else:
             raise json.decoder.JSONDecodeError(
-                'Could not decode response ({}): \n{}'.format(e, txt))
+                'Could not decode response: \n{}'.format(txt), e.doc, e.pos)
 
     # check for error messages
     if isinstance(data, dict):
-        if 'error' in data:
-            raise RequestError(data)
+        if data.get('error'):
+            raise RequestError.from_response(data)
     return data
 
 
