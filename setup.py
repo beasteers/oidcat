@@ -3,8 +3,11 @@ import setuptools
 USERNAME = 'beasteers'
 NAME = 'oidcat'
 
+import os
 import imp
-version = imp.load_source('{}.__version__'.format(NAME), os.path.join(os.path.dirname(__file__), NAME, '__version__.py'))
+version = imp.load_source(
+    '{}.__version__'.format(NAME),
+    os.path.join(os.path.dirname(__file__), NAME, '__version__.py'))
 version = version.__version__
 
 setuptools.setup(
