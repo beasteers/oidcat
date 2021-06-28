@@ -1,14 +1,15 @@
 import os
 import time
 import oidcat
-from unittest.mock import patch
-# @patch.dict('os.environ', {'newkey': 'newvalue'})
+# from unittest.mock import patch
+import pytest
 
-
-def test_with_keycloak_secrets_file():
+@pytest.mark.parametrize('fname', [None, True])
+def test_with_keycloak_secrets_file(tmpdir, fname):
     host = 'auth.domain.com'
     client_id = 'a'
     client_secret = 'b'
+    oidcat.util.TMPDIR = tmpdir
     cfg = oidcat.util.with_keycloak_secrets_file(
         host, client_id, client_secret, realm='asdf', fname=None)['web']
     assert cfg['issuer'] == 'https://{}/auth/realms/asdf'.format(host)
@@ -18,19 +19,25 @@ def test_with_keycloak_secrets_file():
     assert cfg['token_introspection_uri'] == 'https://{}/auth/realms/asdf/protocol/openid-connect/token/introspect'.format(host)
     assert cfg['client_id'] == client_id
     assert cfg['client_secret'] == client_secret
+    if fname:
+        fname = oidcat.util._write_secrets_file(fname, cfg)
+        assert os.path.isfile(fname)
+        assert os.path.realpath(fname).startswith(os.path.realpath(tmpdir) + os.sep)
+        assert not fname.startswith('/.oidcat_clients/')
 
 
-def test_get_redirect_uris():
-    with patch.dict('os.environ', {oidcat.util.HOST_KEY: 'mydomain.com'}):
-        assert oidcat.util._get_redirect_uris() == ['https://mydomain.com']
-        assert oidcat.util._get_redirect_uris([]) == ['https://mydomain.com']
-        assert oidcat.util._get_redirect_uris('otherdomain.com') == ['https://otherdomain.com']
-        assert oidcat.util._get_redirect_uris(['otherdomain.com']) == ['https://otherdomain.com']
-        assert oidcat.util._get_redirect_uris(['https://otherdomain.com']) == ['https://otherdomain.com']
-        assert oidcat.util._get_redirect_uris(['http://otherdomain.com']) == ['http://otherdomain.com']
+# def test_get_redirect_uris():
+#     with patch.dict('os.environ', {oidcat.util.HOST_KEY: 'mydomain.com'}):
+#         assert oidcat.util._get_redirect_uris() == ['https://mydomain.com']
+#         assert oidcat.util._get_redirect_uris([]) == ['https://mydomain.com']
+#         assert oidcat.util._get_redirect_uris('otherdomain.com') == ['https://otherdomain.com']
+#         assert oidcat.util._get_redirect_uris(['otherdomain.com']) == ['https://otherdomain.com']
+#         assert oidcat.util._get_redirect_uris(['https://otherdomain.com']) == ['https://otherdomain.com']
+#         assert oidcat.util._get_redirect_uris(['http://otherdomain.com']) == ['http://otherdomain.com']
 
 
-def tests_well_known_url():
+def tests_well_known_url(tmpdir):
+    oidcat.util.TMPDIR = tmpdir
     urlp = 'https://app.com/auth/realms/{}/.well-known/openid-configuration'
     assert oidcat.util.well_known_url('app.com') == urlp.format('master')
     assert oidcat.util.well_known_url('app.com', 'asdf') == urlp.format('asdf')
@@ -75,9 +82,12 @@ def test_asurl():
 
 def test_aslist():
     assert oidcat.util.aslist(None) == []
+    assert oidcat.util.aslist(0) == [0]
     assert oidcat.util.aslist(5) == [5]
     assert oidcat.util.aslist([5]) == [5]
     assert oidcat.util.aslist((5,)) == [5]
+    assert oidcat.util.aslist('a,b') == ['a,b']
+    assert oidcat.util.aslist('a,b', split=',') == ['a', 'b']
 
 
 def test_color():

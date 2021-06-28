@@ -5,7 +5,7 @@
     import oidcat
 
     sess = oidcat.Session(
-        'auth.myserver.com', 'myusername', 'mysecretpassword', 
+        'auth.myserver.com', 'myusername', 'mysecretpassword',
         client_id='my-client-id')
 
     # lets go le$beans les go!
@@ -27,7 +27,7 @@ Whereas with ``requests``, you'd see:
     # trying to access protected endpoints gonna make u sad
     resp = sess.get('https://api.myserver.com/protected/endpoint')
     resp.raise_for_status()  # Raises 401 Unauthorized error
-    data = resp.json()  # no data :'(    
+    data = resp.json()  # no data :'(
 
 
 '''
@@ -50,16 +50,16 @@ class Session(requests.Session):
         '''A ``requests.Session`` object that implicitly handles 0Auth2 authentication
         for services like Keycloak.
 
-        This behaves exactly like a ``requests.Session`` object, except that it contains a token manager 
+        This behaves exactly like a ``requests.Session`` object, except that it contains a token manager
         and bundles the token in an Authorization header of each request.
 
         .. note::
             This is just a thin wrapper that incorporates the functionality of the ``Access`` object into python ``requests``.
-            This means that it's relatively trivial to extend this code to support other querying libraries 
+            This means that it's relatively trivial to extend this code to support other querying libraries
             (though I don't really know if there's a need to cuz I feel like requests covers everything pretty well. Maybe ``urllib``? idk).
 
         .. code-block:: python
-            
+
             # create just like requests.Session
             sess = oidcat.Session('auth.myserver.com', 'myusername', 'secretpassword')
             # and everything is auto-magically authenticated !
@@ -69,10 +69,10 @@ class Session(requests.Session):
             # you can disable it
             sess.get('otherserver.com/i/cant/have/a/token', token=False).json()
 
-            # and if you don't want to add it by default, 
+            # and if you don't want to add it by default,
             # you can disable automatic token injection
             sess = oidcat.Session(
-                'auth.myserver.com', 'myusername', 'secretpassword', 
+                'auth.myserver.com', 'myusername', 'secretpassword',
                 inject_token=False)
 
         Arguments:
@@ -129,7 +129,7 @@ class Session(requests.Session):
 
     def require_login(self, *a, **kw):
         '''If not logged in, log back in.'''
-        return self.require(*a, **kw)
+        return self.access.require(*a, **kw)
 
 
 class _Qs:
@@ -145,26 +145,26 @@ class Access:
     # _discard_credentials = False
     def __init__(self, url, username=None, password=None,
                  client_id='admin-cli', client_secret=None,
-                 token=None, refresh_token=None, 
-                 refresh_buffer=8, refresh_token_buffer=20, 
-                 login=None, offline=None, ask=False, 
-                 store=False, discard_credentials=False, 
+                 token=None, refresh_token=None,
+                 refresh_buffer=8, refresh_token_buffer=20,
+                 login=None, offline=None, ask=False,
+                 store=False, discard_credentials=False,
                  sess=None, _wk=None):
         '''Controls access, making sure you always have a valid token.
 
         In order to have authenticated requests, you must specify one of:
-        
-        - ``username`` and ``password`` - if you specify this, it will functionally never expire. 
+
+        - ``username`` and ``password`` - if you specify this, it will functionally never expire.
           This is because we keep the username and password in memory so that it can be used in scripts that run indefinitely.
         - ``token`` - this typically has a short lifespan so it's for quick operations where you have the token.
           Usually you wouldn't need to do this, but it's possible if you really want to!
         - ``refresh_token`` - if you already have a refresh token, session only lasts the life of a refresh token.
-          This is a potentially safer method if you need to run something under a few hours (or whatever your 
+          This is a potentially safer method if you need to run something under a few hours (or whatever your
           refresh token lifespan is).
 
-        A potential other solution for long lived tokens is to use an offline token. You use your 
-        username and password once and it will get an offline refresh token that can be stored and used 
-        for extended or indefinite periods of time (depending on your auth server settings). 
+        A potential other solution for long lived tokens is to use an offline token. You use your
+        username and password once and it will get an offline refresh token that can be stored and used
+        for extended or indefinite periods of time (depending on your auth server settings).
         To use offline tokens, just use ``offline=True``.
 
         Arguments:
@@ -191,7 +191,7 @@ class Access:
             refresh_token_buffer (float): equivalent to `refresh_buffer`, but for the refresh token.
             login (bool): whether we should attempt to login. By default, this will be true
                 unless only an access token is specified.
-            offline (bool): should we request offline tokens? This lets you have long term 
+            offline (bool): should we request offline tokens? This lets you have long term
                 (potentially indefinite) access without needing a username and password. To pass an
                 existing offline token, pass it as ``refresh_token=offline_token``.
             sess (Session): an existing session object.
@@ -199,10 +199,10 @@ class Access:
                 a username and password? Useful for cli apps.
             store (bool): should we store tokens and urls to disk? (persistance between cli calls)
             discard_credentials (bool): should we discard the credentials after logging in?
-                By default, we will keep the last used username and password on the object so 
+                By default, we will keep the last used username and password on the object so
                 that we can log back in after the refresh token expires. If this is set to True,
-                it means that you will only have automatic access for the lifetime of the 
-                refresh token. In order to maintain access you would have to call 
+                it means that you will only have automatic access for the lifetime of the
+                refresh token. In order to maintain access you would have to call
                 ``self.login(username, password)`` to renew the refresh token before it expires.
         '''
         self.sess = sess or requests
@@ -281,7 +281,7 @@ class Access:
             # the efficiency of this is based on the assumption that:
             #     (timeof(with lock) + timeof(bool(token)))/token.expiration
             #       < timeof(lock) / dt_call
-            # which should almost always be true, because short login tokens 
+            # which should almost always be true, because short login tokens
             # are forking awful.
             with self.login_lock:
                 if not self.token:
@@ -300,8 +300,8 @@ class Access:
                 for one thru the terminal? By default it will be ``False``,
                 unless ``ask=True`` was provided to __init__().
             offline (bool): should we request an offline token? These are usually
-                much longer lived and allows you to have long term access without 
-                having to store a username and password on disk. By default it will 
+                much longer lived and allows you to have long term access without
+                having to store a username and password on disk. By default it will
                 be ``False``, unless ``offline=True`` was provided to __init__().
         '''
         offline = self.offline if offline is None else offline
@@ -367,13 +367,13 @@ class Access:
 
 def response_json(resp):
     '''Get the json response from the object, and raise if it's an error.
-    It also detects 502 Bad Gateway errors which are returned by nginx 
+    It also detects 502 Bad Gateway errors which are returned by nginx
     commonly when server configurations change.
 
     .. code-block:: python
 
         data = oidcat.response_json(sess.get('blah.com/api/mydata))
-    
+
     Arguments:
         resp (requests.Response): The API server response.
 

@@ -5,6 +5,24 @@
  - add token signature validation to the token object (?)
  - add token blacklist checking - idk if this can be done thru something in the well-known config?
 
+
+## 0.5.1
+ - Added `util.aslist(x, split=',')` which follows these rules
+   - `aslist('asdf,zxcv', split=',')'` => `['asdf', 'zxcv']`
+   - `aslist('asdf,zxcv')'` => `['asdf,zxcv']`
+ - `util.aslist` previously converted all falsey values to an empty list, but now it only converts `None`
+ - `util._get_redirect_uris` was removed because after a closer look at `flask-oidc` and `oauth2client`, that value is never actually used. Rationale:
+   - `redirect_uris` key is never used from `self.client_secrets` in [`flask_oidc/__init__.py`](https://github.com/puiterwijk/flask-oidc/blob/master/flask_oidc/__init__.py)
+   - the client secrets file is passed to [`oauth2client`](https://github.com/puiterwijk/flask-oidc/blob/7f16e27b926fc12953d6b2ae78a9b9cc9b8d1769/flask_oidc/__init__.py#L173), and `redirect_uri` is not passed explicitly as an argument (though it exists in the secrets file)
+   - oauth2client never uses the `redirect_uris` parameter from the dict, just the one from the function arguments [seen here](https://oauth2client.readthedocs.io/en/latest/_modules/oauth2client/client.html#flow_from_clientsecrets) which we just saw we never pass
+   - flask oidc overrides the `redirect_uri` attr [here](https://github.com/puiterwijk/flask-oidc/blob/7f16e27b926fc12953d6b2ae78a9b9cc9b8d1769/flask_oidc/__init__.py#L533)
+   - meaning that it's just a confusing, buggy, and ultimately dead piece of code ! so good riddance haha
+ - `util.with_well_known_secrets_file` and `util.with_keycloak_secrets_file` will now write to `/tmp/.oidcat_clients/<client>.json` by default.
+ -  `oidcat.util.Role` is imported to `oidcat.Role` and `oidcat.role` is provided as an empty starting role list for convenience
+ -  `oidcat.util.Env` is imported to `oidcat.Env` and `oidcat.env` is provided as an empty environment scope for convenience
+ - note: a lot of the diffs are from trim trailing whitespace in my editor
+ - Added alternative permissions interface
+
 ## 0.5.0
  - Added proper RTD docs, including a bunch of docstrings
  - Moved version specification into `__version__.py`. idk just trying out a different format for packages.

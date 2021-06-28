@@ -3,6 +3,7 @@ import json
 import functools
 import contextlib
 import traceback
+import warnings
 import requests
 import urllib
 from . import RequestError
@@ -39,7 +40,7 @@ def with_well_known_secrets_file(
             "client_id": client_id,
             "client_secret": client_secret,
             "issuer": wkn['issuer'],
-            "redirect_uris": _get_redirect_uris(redirect_uris),
+            # "redirect_uris": _get_redirect_uris(redirect_uris),
             "auth_uri": wkn['authorization_endpoint'],
             "userinfo_uri": wkn['userinfo_endpoint'],
             "token_uri": wkn['token_endpoint'],
@@ -75,7 +76,7 @@ def with_keycloak_secrets_file(
             "client_id": client_id,
             "client_secret": client_secret,
             "issuer": realm_url,
-            "redirect_uris": _get_redirect_uris(redirect_uris),
+            # "redirect_uris": _get_redirect_uris(redirect_uris),
             "auth_uri": "{}/auth".format(oidc_url),
             "userinfo_uri": "{}/userinfo".format(oidc_url),
             "token_uri": "{}/token".format(oidc_url),
@@ -103,18 +104,37 @@ def with_keycloak_secrets_file_from_environment(env=None, url=None, realm=None, 
     return with_keycloak_secrets_file(
         asurl(url or env('AUTH_HOST')), env('CLIENT_ID'), env('CLIENT_SECRET'),
         realm=realm or env('AUTH_REALM') or None,
-        redirect_uris=_get_redirect_uris(env('REDIRECT_URIS')),
+        # redirect_uris=_get_redirect_uris(env('REDIRECT_URIS')),
         fname=fname,
     )
 
 
-def _write_secrets_file(fname, cfg):
+# places to store secrets file
+HOMEDIR = os.path.expanduser('~')
+TMPDIR = os.getenv('TMPDIR') or '/tmp'
+SECRETS_PATTERN = '.{name}_clients/{client_id}.json'
+# _SECRETS_FNAME = '~/.{}_clients/{}.json'
+# _TMP_SECRETS_FNAME = os.path.join(os.getenv('TMPDIR') or '/tmp', '.{}_clients/{}.json')
+if HOMEDIR == '/':
+    # warnings.warn(
+    #     'Home directory was set to {} which is invalid. '
+    #     'Defaulting to {} instead.'.format(HOMEDIR, TMPDIR))
+    HOMEDIR = TMPDIR
+
+
+def _write_secrets_file(fname, cfg, use_tmp=True):
+    # if a falsey thing was passed as a filename, just return the dict
     if not fname:
         return cfg
+    # automatic filename
     if fname is True:
-        fname = os.path.expanduser('~/.{}_client_secrets/{}.json'.format(
-            __name__.split('.')[0], cfg.get('client_id', 'secrets')))
-    fname = os.path.abspath(fname)
+
+        fname = os.path.join(
+            TMPDIR if use_tmp else HOMEDIR, SECRETS_PATTERN.format(
+                name=__name__.split('.')[0],
+                client_id=cfg.get('client_id', 'secrets')))
+    # create file
+    fname = os.path.realpath(fname)
     os.makedirs(os.path.dirname(fname), exist_ok=True)
     with open(fname, 'w') as f:
         json.dump(cfg, f, indent=4, sort_keys=True)
@@ -134,12 +154,13 @@ def well_known_url(url, realm=None, secure=None):
     return url
 
 
-def _get_redirect_uris(uris=None, **kw):
-    '''Gets properly formatted uri's for the server-side secrets file configuration.'''
-    uris = aslist(uris)
-    if not uris:
-        uris = [os.getenv(HOST_KEY) or '{}:{}/*'.format(DEFAULT_HOST, os.getenv(PORT_KEY, str(DEFAULT_PORT)))]
-    return [asurl(u, **kw) for u in uris]
+# def _get_redirect_uris(uris=None, **kw):
+#     '''Gets properly formatted uri's for the server-side secrets file configuration.'''
+#     uris = aslist(uris, split=',')
+#     if not uris:
+#         uris = uris or aslist(os.getenv(HOST_KEY), split=',')
+#         uris = uris or ['{}:{}/*'.format(DEFAULT_HOST, os.getenv(PORT_KEY, str(DEFAULT_PORT)))]
+#     return [asurl(u, **kw) for u in uris]
 
 
 @functools.lru_cache()
@@ -201,27 +222,37 @@ def get_well_known(url, realm=None, secure=None):
 def _asitems(itemtype, *othertypes):
     '''A helper meta function that generates casting functions. 
     e.g.: ``aslist = _asitems(list, tuple, set)``'''
-    def inner(x):
+    def inner(x, split=None):
+        if split and isinstance(x, str):
+            x = x.split(split)
         return (
             x if isinstance(x, itemtype) else
             itemtype(x) if isinstance(x, othertypes) else
-            [x] if x else [])
+            [x] if x is not None and x != '' else [])
     name = itemtype.__name__
-    inner.__name__ = 'as{}'.format(name)
+    inner.__name__ = funcname = 'as{}'.format(name)
     inner.__doc__ = '''Convert value to {name}.
 
-    Falsey values becomes an empty {name}.
-    Types ({others}) are cast to {name}.
+    ``None`` becomes an empty {name}.
+    Other types ({others}) are cast to {name}.
     Everything else becomes a single element {name}.
+    If you want all Falsey values to convert to an empty list,
+    then do ``{func}(value or None)``
     '''.format(
         name='``{}``'.format(name), 
-        others=', '.join('``{}``'.format(c.__name__) for c in othertypes))
+        others=', '.join('``{}``'.format(c.__name__) for c in othertypes),
+        func=funcname)
     return inner
 
 
 aslist = _asitems(list, tuple, set)
 as_set = _asitems(set, tuple, list)
 astuple = _asitems(tuple, list, set)
+
+def asfirst(x):
+    '''Get the first value in a list. Also handle's single values or empty values.
+    For empty values, None is returned.'''
+    return (x[0] if isinstance(x, (list, tuple)) else x) if x else None
 
 
 def asurl(url, *paths, secure=None, **args):

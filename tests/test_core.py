@@ -69,6 +69,29 @@ def server():
         token.check_roles(TEST_MISSING_ROLE, required=True)
         return flask.jsonify({'success': True})
 
+    @oidcat.server.protection
+    def check_roles(role):
+        token = oidc.valid_token()
+        return token, token.check_roles(role, required=True)
+
+    @app.route('/accessible2')
+    @check_roles(TEST_ROLE, permissions_key=None)
+    def accessible2():
+        return flask.jsonify({'success': True})
+
+    @app.route('/accessible3')
+    @check_roles(TEST_ROLE)
+    def accessible3(permissions):
+        token, (has_access,) = permissions
+        assert isinstance(token, oidcat.Token)
+        assert has_access is True
+        return flask.jsonify({'success': True})
+
+    @app.route('/inaccessible3')
+    @check_roles(TEST_MISSING_ROLE)
+    def inaccessible3():
+        return flask.jsonify({'success': True})
+
     @app.errorhandler(Exception)
     def err_handle(e):
         return oidcat.exc2response(e, asresponse=True)
@@ -103,18 +126,30 @@ def test_protected(server, bearer):
     assert server.get('/special').status_code == 401
     assert getitem2(server.get('/special', headers=bearer).get_json(), 'success') is True
 
+
+def test_accessible(server, sess, bearer):
+    assert server.get('/accessible').status_code == 401
+    assert getitem2(server.get('/accessible', headers=bearer).get_json(), 'success') is True
+
+def test_accessible2(server, sess, bearer):
+    assert server.get('/accessible2').status_code == 401
+    assert getitem2(server.get('/accessible2', headers=bearer).get_json(), 'success') is True
+
+def test_accessible3(server, sess, bearer):
+    assert server.get('/accessible3').status_code == 401
+    assert getitem2(server.get('/accessible3', headers=bearer).get_json(), 'success') is True
+
+
 def test_inaccessible(server, sess, bearer):
     assert server.get('/inaccessible').status_code == 401
     assert server.get('/inaccessible', headers=bearer).status_code == 401
 
-def test_accessible(server, sess, bearer):
-    print('accessible 1')
-    assert server.get('/accessible').status_code == 401
-    print('accessible 2')
-    assert getitem2(server.get('/accessible', headers=bearer).get_json(), 'success') is True
-
 def test_inaccessible2(server, sess, bearer):
-    assert server.get('/inaccessible').status_code == 401
-    assert server.get('/inaccessible', headers=bearer).status_code == 401
+    assert server.get('/inaccessible2').status_code == 401
+    assert server.get('/inaccessible2', headers=bearer).status_code == 401
+
+def test_inaccessible3(server, sess, bearer):
+    assert server.get('/inaccessible3').status_code == 401
+    assert server.get('/inaccessible3', headers=bearer).status_code == 401
 
 
