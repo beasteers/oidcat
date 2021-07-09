@@ -94,6 +94,9 @@ class Session(requests.Session):
     def __repr__(self):
         return '<{}({!r})>'.format(self.__class__.__qualname__, self.access)
 
+    def __str__(self):
+        return repr(self)
+
     def request(self, *a, token=None, **kw):
         # check to see if we should use the default behavior
         if token is None:
@@ -133,7 +136,8 @@ class Session(requests.Session):
 
 
 class _Qs:
-    BASE_HOST = 'What is the base domain of your server (e.g. myapp.com - (assumed services: auth.myapp.com, api.myapp.com))?'
+    # BASE_HOST = 'What is the base domain of your server (e.g. myapp.com - (assumed services: auth.myapp.com, api.myapp.com))?'
+    HOST = 'What is the url for your authorization server? e.g. auth.myproject.com'
     USERNAME = 'What is your username?'
     PASSWORD = 'What is your password?'
 
@@ -216,9 +220,15 @@ class Access:
         # (maybe) load saved info from file
         self.store = os.path.expanduser(store) if store else store
         with util.saveddict(self.store) as cfg:
+            # see if we have the url stored somewhere
+            _wk = _wk or cfg.get('well_known') or url or cfg.get('previous_url')
+            if not _wk and ask:
+                _wk = url = util.ask(_Qs.HOST)
+            if url:
+                cfg['previous_url'] = url
             # read cached well-known from config
             self.well_known = cfg['well_known'] = WellKnown(
-                _wk or cfg.get('well_known') or url,
+                _wk or url,
                 client_id=client_id,
                 client_secret=client_secret,
                 refresh_buffer=refresh_buffer,
@@ -397,7 +407,10 @@ def response_json(resp):
 
     # check for error messages
     if isinstance(data, dict):
-        if data.get('error'):
+        error = data.get('error')
+        if error:
+            if isinstance(error, str):
+                data = {'error': True, 'message': error}
             raise RequestError.from_response(data)
     return data
 

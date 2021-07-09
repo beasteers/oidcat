@@ -6,6 +6,17 @@
  - add token blacklist checking - idk if this can be done thru something in the well-known config?
 
 
+
+## 0.5.2
+ - added `oidcat.cli`! This offers a few utilities that are really helpful when creating a CLI wrapping a rest API.
+   - `oidcat.cli.util.cli_formatted` lets you wrap a class method and will format that method's output in either a yaml structure and/or a table depending on the structure of the data. This assumes that it's receiving basic serializable types (`list`, `dict`, `str`, `bool`, etc.), but it will work for other types too (it will just render them as a string).
+   - `oidcat.cli.util.yamltable` the main beans and potatoes of `cli_formatted`. This will render the data like yaml (indented nesting), except anytime a list of dicts is seen, it will be rendered as a table.
+   - `oidcat.cli.util.Nest` I use python Fire for most of my CLIs, but it doesn't have an easy way to do subcommands or to do method namespacing, seeing as it mostly leverages python constructs and there's not an easy way to put methods under a namespace without having to write a bunch of boilerplate. So this let's you nest classes where the nested class has access to the root class.
+ - `oidcat.Session.__str__` now uses `__repr__` (not sure why it didn't do that implicitly, but whatever)
+ - `oidcat.Session` (`Access` really), will ask for the keycloak hostname as well if `ask=True` and no host is provided
+ - `oidcat.response_json` now handles the case where messages are just `{"error": "this is the error message"}`
+
+
 ## 0.5.1
  - Added `util.aslist(x, split=',')` which follows these rules
    - `aslist('asdf,zxcv', split=',')'` => `['asdf', 'zxcv']`

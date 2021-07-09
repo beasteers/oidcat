@@ -40,7 +40,7 @@ class RequestError(Exception):
     def from_response(cls, resp, additional_message=None, defaults=None):
         defaults = dict({
             'type': 'Exception from server', 
-            'message': 'The server returned an error response.', 
+            'message': 'The server returned an error response: {}'.format(resp),
             # 'traceback': 'no traceback given in response: {}'.format(resp)
         }, **(defaults or {}))
         defaults = dict(defaults, **resp)
