@@ -35,17 +35,20 @@ import os
 import json
 import threading
 import requests
+from requests import Session as _Session
 # from requests.auth import HTTPBasicAuth
+# from http.cookiejar import LWPCookieJar, Cookie
 from .token import Token
 from .well_known import WellKnown
 from . import util, RequestError, AuthenticationError
+from .cli import prompts, caching as _caching
 
 # __all__ = ['Session', 'Access']
 
 
-class Session(requests.Session):
+class Session(_Session):
     def __init__(self, auth_url, username=None, password=None,
-                 client_id='admin-cli', client_secret=None,
+                 client_id=None, client_secret=None,
                  inject_token=True, token_key=None, **kw):
         '''A ``requests.Session`` object that implicitly handles 0Auth2 authentication
         for services like Keycloak.
@@ -87,7 +90,10 @@ class Session(requests.Session):
         '''
         super().__init__()
         self.access = Access(
-            auth_url, username, password, client_id, client_secret, sess=self, **kw)
+            auth_url, 
+            username=username, password=password, 
+            client_id=client_id, client_secret=client_secret, 
+            sess=self, **kw)
         self._inject_token = inject_token
         self._token_key = token_key
 
@@ -147,12 +153,12 @@ class _Qs:
 
 class Access:
     # _discard_credentials = False
-    def __init__(self, url, username=None, password=None,
-                 client_id='admin-cli', client_secret=None,
+    def __init__(self, url, *, username=None, password=None,
+                 client_id=None, client_secret=None,
                  token=None, refresh_token=None,
                  refresh_buffer=8, refresh_token_buffer=20,
                  login=None, offline=None, ask=False,
-                 store=False, discard_credentials=False,
+                 store=False, discard_credentials=False, url_base=None, realm=None,
                  sess=None, _wk=None):
         '''Controls access, making sure you always have a valid token.
 
@@ -210,8 +216,6 @@ class Access:
                 ``self.login(username, password)`` to renew the refresh token before it expires.
         '''
         self.sess = sess or requests
-        self.client_id = client_id
-        self.client_secret = client_secret
 
         # this is used to make sure that two threads using the same sess object
         # don't both try to re-login at the same time.
@@ -219,16 +223,39 @@ class Access:
 
         # (maybe) load saved info from file
         self.store = os.path.expanduser(store) if store else store
-        with util.saveddict(self.store) as cfg:
-            # see if we have the url stored somewhere
-            _wk = _wk or cfg.get('well_known') or url or cfg.get('previous_url')
-            if not _wk and ask:
-                _wk = url = util.ask(_Qs.HOST)
-            if url:
-                cfg['previous_url'] = url
+        with _caching.saveddict(self.store) as cfg:
+            if not _wk:
+                prev_url = cfg.get('url')
+                url = url or prev_url
+                if not url:
+                    url = prompts.ask(_Qs.HOST)
+                    if not url:
+                        raise ValueError("Invalid url.")
+            elif not url:
+                pass
+
+            self.url = cfg['url'] = url
+            self.client_id = cfg['client_id'] = client_id = client_id or cfg.get('client_id') or 'admin-cli'
+            self.client_secret = cfg['client_secret'] = client_secret = client_secret or cfg.get('client_secret')
+            self.realm = cfg['realm'] = realm = realm or cfg.get('realm')
+
+            print(url, realm, client_id)
+
+            invalidated = not (
+                not url or url == cfg.get('url') and 
+                not realm or realm == cfg.get('realm') and 
+                not client_id or client_id == cfg.get('client_id') and 
+                not client_secret or client_secret == cfg.get('client_secret')
+            )
+
+            if not _wk and cfg.get('well_known') and not invalidated:
+                print("reusing wellknown")
+                _wk = cfg['well_known']
+
             # read cached well-known from config
             self.well_known = cfg['well_known'] = WellKnown(
-                _wk or url,
+                _wk or url, base=url_base, 
+                realm=realm,
                 client_id=client_id,
                 client_secret=client_secret,
                 refresh_buffer=refresh_buffer,
@@ -236,8 +263,8 @@ class Access:
 
             # read tokens from config
             if token is None and refresh_token is None:
-                token = cfg.get('token')
-                refresh_token = cfg.get('refresh_token') or None
+                token = cfg.get('token') or None if not invalidated else None
+                refresh_token = cfg.get('refresh_token') or None if not invalidated else None
 
         # tokens
         self.token = Token.astoken(token, refresh_buffer)
@@ -264,8 +291,9 @@ class Access:
         return 'Access(\n{})'.format(''.join(
             '  {}={!r},\n'.format(k, v) if k.strip() else '\n' for k, v in (
                 ('username', self.username),
-                ('client', self.client_id),
-                ('valid', bool(self.token)),
+                ('client_id', self.client_id),
+                ('client_secret', '[secret]' if self.client_secret else None),
+                ('valid_token', bool(self.token)),
                 ('refresh_valid', bool(self.refresh_token)),
                 # ('',''),  # hack for newline
                 ('token', self.token),
@@ -298,7 +326,7 @@ class Access:
                     self.login()
         return self.token
 
-    def login(self, username=None, password=None, ask=None, offline=None):
+    def login(self, username=None, password=None, ask=None, offline=None, scope=None):
         '''Login from your authentication provider and acquire a token.
 
         Arguments:
@@ -320,8 +348,7 @@ class Access:
         logged_in = False  # in case the refresh token fails
         if self.refresh_token:
             try:
-                self.token, self.refresh_token = self.well_known.refresh_token(
-                    self.refresh_token, offline=offline)
+                self.refresh(offline)
                 logged_in = bool(self.token)
             except RequestError as e:
                 if '(invalid_grant)' not in str(e):
@@ -330,8 +357,8 @@ class Access:
 
         if not logged_in:  # that didn't work, let's try with username/password
             ask = self.ask if ask is None else ask
-            username = username or self.username or ask and util.ask(_Qs.USERNAME)
-            password = password or self.password or ask and util.ask(_Qs.PASSWORD, secret=True)
+            username = username or self.username or ask and prompts.ask(_Qs.USERNAME)
+            password = password or self.password or ask and prompts.ask(_Qs.PASSWORD, secret=True)
             if not username:
                 raise AuthenticationError('No username provided for login at {}'.format(
                     self.well_known['token_endpoint']))
@@ -340,12 +367,17 @@ class Access:
                 self.username, self.password = username, password
 
             self.token, self.refresh_token = self.well_known.get_token(
-                username, password, offline=offline)
+                username, password, offline=offline, scope=scope)
 
         if self.store:
-            with util.saveddict(self.store) as cfg:
+            with _caching.saveddict(self.store) as cfg:
                 cfg['token'] = str(self.token)
                 cfg['refresh_token'] = str(self.refresh_token)
+
+    def refresh(self, offline=None):
+        self.token, self.refresh_token = self.well_known.refresh_token(
+            self.refresh_token, offline=self.offline if offline is None else offline)
+        print(repr(self.token))
 
     def logout(self):
         '''Logout from your authentication provider.'''
@@ -353,17 +385,19 @@ class Access:
         self.token = self.refresh_token = None
         self.username = self.password = None
         if self.store:
-            with util.saveddict(self.store) as cfg:
+            with _caching.saveddict(self.store) as cfg:
                 cfg['token'] = cfg['refresh_token'] = None
                 cfg['username'] = cfg['password'] = None  # making sure
 
-    def configure(self, clear=False, **kw):
+    def configure(self, clear=False, show=False, **kw):
         '''Update the saved information stored on disk.'''
         if self.store:
-            with util.saveddict(self.store) as cfg:
+            with _caching.saveddict(self.store) as cfg:
                 if clear:
                     cfg.clear()
                 cfg.update(kw)
+                if show:
+                    print(cfg)
 
     def user_info(self):
         '''Get user info from your authentication provider.'''

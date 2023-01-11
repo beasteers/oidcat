@@ -20,11 +20,11 @@ setuptools.setup(
     author_email='bea.steers@gmail.com',
     # url='https://github.com/{}/{}'.format(USERNAME, NAME),
     packages=setuptools.find_packages(),
-    entry_points={'console_scripts': ['oidcat-admin=oidcat.cli.keycloak:main']},
+    entry_points={'console_scripts': ['oidcat=oidcat.cli.keycloak:main']},
     install_requires=['requests'],
     extras_require={
         'server': ['flask', 'flask_oidc', 'sqlitedict'],
-        'cli': ['tabulate', 'fire'],
+        'cli': ['tabulate', 'fire>=0.5.0', 'yamtable'],
     },
     license='MIT License',
     keywords='')

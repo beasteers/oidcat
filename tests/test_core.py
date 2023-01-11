@@ -37,7 +37,7 @@ def server():
         PROPAGATE_EXCEPTIONS=True,
         SECRET_KEY='blagh')
 
-    oidc = oidcat.server.OpenIDConnect(app, '/tmp/creds.db')
+    oidc = oidcat.server.server.OpenIDConnect(app, '/tmp/creds.db')
 
     @app.route('/')
     def index():
@@ -69,7 +69,7 @@ def server():
         token.check_roles(TEST_MISSING_ROLE, required=True)
         return flask.jsonify({'success': True})
 
-    @oidcat.server.protection
+    @oidcat.server.server.protection
     def check_roles(role):
         token = oidc.valid_token()
         return token, token.check_roles(role, required=True)

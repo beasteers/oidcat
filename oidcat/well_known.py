@@ -1,12 +1,13 @@
+import functools
 import requests
 from requests.auth import HTTPBasicAuth
-from .util import aslist, well_known_url
+from .util import aslist, as_realm_url
 from . import RequestError, Token
 
 
 class WellKnown(dict):
     def __init__(self, url, client_id='admin-cli', client_secret=None, 
-                 realm=None, sess=None, secure=True,
+                 realm=None, sess=None, secure=True, base=None,
                  refresh_buffer=0, refresh_token_buffer=0):
         '''A generic interface that encapsulates the information returned from 
         the Well-Known configuration of an authorization server.
@@ -49,7 +50,7 @@ class WellKnown(dict):
             data = url
         else:
             data = check_error(self.sess.get(
-                well_known_url(url, realm=realm, secure=secure)
+                well_known_url(url, realm=realm, secure=secure, base=base)
             ).json(), '.well-known')
         super().__init__(data)
 
@@ -141,3 +142,88 @@ def bearer(token=None):
 
 
 WellKnown.bearer = staticmethod(bearer)
+
+
+def well_known_url(url, realm=None, secure=None, base='') -> str:
+    '''Prepares a consistent well-known url'''
+    if '/.well-known/openid' not in url:
+        url, realm = _parse_auth_url(url, realm)
+        url = as_realm_url(
+            url, '.well-known/openid-configuration', 
+            realm=realm, base=base, secure=secure)
+    return url
+
+
+@functools.lru_cache()
+def get_well_known(url, realm=None, secure=None) -> dict:
+    '''Get the well known for an oauth2 server.
+
+    These are equivalent:
+     - auth.myproject.com
+     - master@auth.myproject.com
+     - https://auth.myproject.com/auth/realms/master/.well-known/openid-configuration
+
+    For another realm, you can do:
+     - mycustom@auth.myproject.com
+
+    .. code-block:: python
+
+        # https://auth.myproject.com/auth/realms/master/.well-known/openid-configuration
+        {
+            "issuer": "https://auth.myproject.com/auth/realms/master",
+            "authorization_endpoint": "https://auth.myproject.com/auth/realms/master/protocol/openid-connect/auth",
+            "token_endpoint": "https://auth.myproject.com/auth/realms/master/protocol/openid-connect/token",
+            "token_introspection_endpoint": "https://auth.myproject.com/auth/realms/master/protocol/openid-connect/token/introspect",
+            "introspection_endpoint": "https://auth.myproject.com/auth/realms/master/protocol/openid-connect/token/introspect"
+            "userinfo_endpoint": "https://auth.myproject.com/auth/realms/master/protocol/openid-connect/userinfo",
+            "end_session_endpoint": "https://auth.myproject.com/auth/realms/master/protocol/openid-connect/logout",
+            "jwks_uri": "https://auth.myproject.com/auth/realms/master/protocol/openid-connect/certs",
+            "registration_endpoint": "https://auth.myproject.com/auth/realms/master/clients-registrations/openid-connect",
+
+            "check_session_iframe": "https://auth.myproject.com/auth/realms/master/protocol/openid-connect/login-status-iframe.html",
+            "grant_types_supported": ["authorization_code", "implicit", "refresh_token", "password", "client_credentials"],
+            "response_types_supported": ["code", "none", "id_token", "token", "id_token token", "code id_token", "code token", "code id_token token"],
+            "subject_types_supported": ["public", "pairwise"],
+            "id_token_signing_alg_values_supported": ["PS384", "ES384", "RS384", "HS256", "HS512", "ES256", "RS256", "HS384", "ES512", "PS256", "PS512", "RS512"],
+            "id_token_encryption_alg_values_supported": ["RSA-OAEP", "RSA1_5"],
+            "id_token_encryption_enc_values_supported": ["A128GCM", "A128CBC-HS256"],
+            "userinfo_signing_alg_values_supported": ["PS384", "ES384", "RS384", "HS256", "HS512", "ES256", "RS256", "HS384", "ES512", "PS256", "PS512", "RS512", "none"],
+            "request_object_signing_alg_values_supported": ["PS384", "ES384", "RS384", "ES256", "RS256", "ES512", "PS256", "PS512", "RS512", "none"],
+            "response_modes_supported": ["query", "fragment", "form_post"],
+            "token_endpoint_auth_methods_supported": ["private_key_jwt", "client_secret_basic", "client_secret_post", "tls_client_auth", "client_secret_jwt"],
+            "token_endpoint_auth_signing_alg_values_supported": ["PS384", "ES384", "RS384", "ES256", "RS256", "ES512", "PS256", "PS512", "RS512"],
+            "claims_supported": ["aud", "sub", "iss", "auth_time", "name", "given_name", "family_name", "preferred_username", "email", "acr"],
+            "claim_types_supported": ["normal"],
+            "claims_parameter_supported": false,
+            "scopes_supported": ["openid", "address", "email", "microprofile-jwt", "offline_access", "phone", "profile", "roles", "web-origins"],
+            "request_parameter_supported": true,
+            "request_uri_parameter_supported": true,
+            "code_challenge_methods_supported": ["plain", "S256"],
+            "tls_client_certificate_bound_access_tokens": true,
+        }
+
+    '''
+    url = well_known_url(url, realm, secure=secure)
+    resp = requests.get(url).json()
+    if 'error' in resp:
+        raise RequestError('Error getting .well-known: {}'.format(resp['error']))
+    return resp
+
+
+def _parse_auth_url(url, realm=None):
+    '''Parses an optional realm parameter out of a url. e.g. myrealm@auth.domain.com'''
+    # split off schema
+    prefix = None
+    parts = url.split('://', 1)
+    if len(parts) > 1:
+        prefix, url = parts
+
+    # split off realm
+    parts = url.split('@', 1)
+    realm = (parts[0] if len(parts) > 1 else realm)
+    url = parts[-1]
+
+    # put it back together
+    if prefix:
+        url = '{}://{}'.format(prefix, url)
+    return url, realm

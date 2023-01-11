@@ -96,8 +96,8 @@ import flask
 from flask import request, current_app, g
 import flask_oidc
 import oidcat
-from . import util, Unauthorized, RequestError, exc2response
-from .token import Token
+from .. import util, Unauthorized, RequestError, exc2response
+from ..token import Token
 
 log = flask_oidc.logger
 

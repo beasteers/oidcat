@@ -334,6 +334,7 @@ class _NestedMetaClass(type):
 
 
 class Nest(metaclass=_NestedMetaClass):
+    ''''''
     # class A:
     #     x = 10
     #     class nested(Nest):
@@ -345,8 +346,9 @@ class Nest(metaclass=_NestedMetaClass):
     #
     # $ a.py nested asdf
 
-    ROOT_ATTRS = True
+    __ROOT_ATTRS__ = True
     def __init__(self, instance):
+        ''''''
         root = instance
         if isinstance(instance, Nest):
             root = getattr(instance, '_root_', instance)
@@ -354,7 +356,10 @@ class Nest(metaclass=_NestedMetaClass):
         self._root_ = root
         self.__name__ = self.__class__.__name__
 
+    def __str__(self) -> str:
+        return self.__.__class__.__str__(self)
+
     def __getattr__(self, key):
-        if not self.ROOT_ATTRS:
+        if not self.__ROOT_ATTRS__:
             raise KeyError(key)
         return getattr(self.__, key)
